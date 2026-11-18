@@ -347,69 +347,38 @@ namespace sjtu {
       ret.push_back(cpp); ret.push_back(a);
       return ret;
     }
-    int fac=BASE/(b.digits.back()+1),flg=false;
-    if(fac>1) {
-      a.naive_mul(fac),b.naive_mul(fac);
-    }
-    a.standardize(),b.standardize();
-    if(b.digits.size()&1) {
-      flg=true;
-      a.digits.insert(a.digits.begin(),0),b.digits.insert(b.digits.begin(),0);
-    }
-    int len=b.digits.size()/2;
-    std::vector <long long> give{},ret{};
-    for(int i=((int)a.digits.size()-1)/len*len;i>=0;i-=len) {
-      for(int j=std::min(i+len-1,(int)(a.digits.size())-1);j>=i;j--) {
-      give.push_back(a.digits[j]);
-      }
-      std::vector <long long> rev_give;
-      for(int j=(int)(give.size())-1;j>=0;j--) rev_give.push_back(give[j]);
-      if(!geq(rev_give,b.digits)) {
-        for(int j=1;j<=len;j++) ret.push_back(0);
-        continue;
-      }
-      if(give.size()<=2*len) {
-        for(int j=1;j<len;j++) ret.push_back(0);
-        ret.push_back(1);
-        int2048 ex(0); ex.digits=rev_give;
-        ex.minus(b); ex.standardize();
-        give.clear();
-        for(int j=(int)(ex.digits.size())-1;j>=0;j--) give.push_back(ex.digits[j]);
-        continue;
-      }
-      int2048 aa(0),bb(0); 
-      for(int j=len;j<=std::min((int)rev_give.size(),3*len)-1;j++) aa.digits.push_back(rev_give[j]);
-      for(int j=len;j<=2*len-1;j++) bb.digits.push_back(b.digits[j]);
-      auto vec=REALDIV(aa,bb);
-      int2048 val=vec[0]; 
-      int2048 cp=val; cp.mul(b);
-      while(geq(rev_give,cp.digits)) {
-        cp.add(b); val.add(int2048(1));
-      }
+    int siz=b.digits.size(),len=(int)a.digits.size()-siz+2,nw=1;
+    int2048 inv(BASE*BASE/(b.digits.back()+1));
+    while(true) {
+      int2048 base(0);
+      base.digits.assign(siz+nw+1,0);
+      base.digits.back()=1;
       while(true) {
-        cp.minus(b); val.minus(int2048(1));
-        if(geq(rev_give,cp.digits)) break;
+        int2048 cp=inv; cp.mul(b);
+        int2048 delta=base; delta.minus(cp);
+        cp=inv; cp.mul(delta);
+        if((int)cp.digits.size()<=siz+nw) break;
+        cp.digits.erase(cp.digits.begin(),cp.digits.begin()+siz+nw);
+        cp.standardize(); inv.add(cp);
       }
-      val.standardize();
-      for(int j=1;j<=len-(int)(val.digits.size());j++) ret.push_back(0);
-      for(int j=(int)(val.digits.size())-1;j>=0;j--) ret.push_back(val.digits[j]);
-      aa.digits=rev_give; aa.minus(cp);
-      aa.standardize(); give.clear();
-      for(int j=(int)(aa.digits.size())-1;j>=0;j--) give.push_back(aa.digits[j]);
+      if(nw==len) break;
+      int nt=std::min(nw*2,len);
+      inv.digits.insert(inv.digits.begin(),nt-nw,0);
+      nw=nt;
     }
-    int2048 val(0),res(0);
-    for(int i=(int)(ret.size()-1);i>=0;i--) val.digits.push_back(ret[i]);
-    for(int i=(int)(give.size())-1;i>=0;i--) res.digits.push_back(give[i]);
-    val.standardize(),res.standardize();
-    std::vector <int2048> RET;
-    if(flg) {
-      if(res.digits.size()) {
-        res.digits.erase(res.digits.begin());
-      }
+    int2048 val=a; val.mul(inv);
+    if((int)val.digits.size()<=siz+len) val.digits.clear();
+    else val.digits.erase(val.digits.begin(),val.digits.begin()+siz+len);
+    val.standardize();
+    int2048 cp=val; cp.mul(b);
+    int2048 res=a; res.minus(cp);
+    while(res.flg==-1) {
+      val.minus(1); res.add(b);
     }
-    res.standardize();
-    RET.push_back(val),RET.push_back(res);
-    return RET;
+    while(geq(res.digits,b.digits)) {
+      val.add(1); res.minus(b);
+    }
+    return {val,res};
   }
 
   int2048& int2048::div(const int2048& Extra) {
