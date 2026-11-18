@@ -321,6 +321,10 @@ namespace sjtu {
   std::vector <int2048> int2048::REALDIV(int2048 a,int2048 b) {
     a.flg=b.flg=1;
     a.standardize(),b.standardize();
+    if(a.digits.size()<=4&&b.digits.size()<=4) {
+      long long x=change_ll(a),y=change_ll(b);
+      return {int2048(x/y),int2048(x%y)};
+    }
     if(!geq(a.digits,b.digits)) {
       if(a.flg==b.flg) {
         int2048 sh(0); a.flg=1;
