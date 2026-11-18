@@ -18,7 +18,7 @@ using int2048 = sjtu::int2048;
 
 class EvalVisitor : public Python3ParserBaseVisitor {
 	// TODO: override all methods of Python3ParserBaseVisitor
-	std::unordered_map <std::string, std::any> mp;
+	std::map <std::string, std::any> mp;
 	struct FCT {
         Python3Parser::ParametersContext *parameters;
         Python3Parser::SuiteContext *suite;
@@ -28,16 +28,31 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 		bool Initial;
 		std::any copy;
 	};
-	std::unordered_map <std::string,std::vector<Args>> mp_args;
-    std::unordered_map <std::string, FCT> mp_f;
-	std::vector <std::unordered_map<std::string,std::any>> locals;
-	int jumping = 0;
+	std::map <std::string,std::vector<Args>> mp_args;
+    std::map <std::string, FCT> mp_f;
+	std::map <std::string, std::map <std::string, std::any>> tmp_mp;
+	std::map <std::string, long long> tims;
+	std::string generate_ID(std::string name) {
+		long long nw = ++tims[name];
+		std::string s = name, oth = "";
+		s += '#';
+        while(nw) {
+			oth += nw % 10;
+			nw /= 10;
+		}
+		for(int i = (int)oth.size() - 1; i >= 0; i--) {
+			s += oth[i];
+		}
+		return s;
+	}
+	std::vector <std::string> stk;
+	struct BreakSignal {};
+	struct ContinueSignal {};
 	std::unordered_map <Python3Parser::TermContext*, std::pair<std::vector<Python3Parser::FactorContext*>,std::vector<Python3Parser::Muldivmod_opContext*>>> term_cache;
 	std::unordered_map <Python3Parser::Arith_exprContext*, std::pair<std::vector<Python3Parser::TermContext*>,std::vector<Python3Parser::Addorsub_opContext*>>> arith_cache;
 	std::unordered_map <Python3Parser::ComparisonContext*, std::pair<std::vector<Python3Parser::Arith_exprContext*>,std::vector<Python3Parser::Comp_opContext*>>> compare_cache;
 
 	std::unordered_map <antlr4::tree::ParseTree*, std::string> text_cache;
-	std::unordered_map <antlr4::tree::ParseTree*, antlr4::tree::ParseTree*> node_cache;
 	std::unordered_map <Python3Parser::AtomContext*, std::any> literal_cache;
 	std::unordered_map <Python3Parser::SuiteContext*, std::vector<Python3Parser::StmtContext*>> suite_cache;
 	const std::string &node_text(antlr4::tree::ParseTree *ctx) {
@@ -45,45 +60,6 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 		if(it != text_cache.end()) return it->second;
 		return text_cache.emplace(ctx,ctx->getText()).first->second;
 	}
-public:
-	std::any visit(antlr4::tree::ParseTree *ctx) override {
-		auto it = node_cache.find(ctx);
-		if(it == node_cache.end()) {
-			auto ptr = ctx;
-			while(auto rule = dynamic_cast <antlr4::ParserRuleContext*> (ptr)) {
-				auto next = ptr;
-				switch(rule->getRuleIndex()) {
-					case Python3Parser::RuleTest:
-					case Python3Parser::RuleOr_test:
-					case Python3Parser::RuleAnd_test:
-					case Python3Parser::RuleNot_test:
-					case Python3Parser::RuleComparison:
-					case Python3Parser::RuleArith_expr:
-					case Python3Parser::RuleTerm:
-					case Python3Parser::RuleFactor:
-					case Python3Parser::RuleAtom_expr:
-					case Python3Parser::RuleArgument:
-					case Python3Parser::RuleStmt:
-					case Python3Parser::RuleSmall_stmt:
-					case Python3Parser::RuleCompound_stmt:
-					case Python3Parser::RuleFlow_stmt:
-						if(rule->children.size() == 1) next = rule->children[0];
-						break;
-					case Python3Parser::RuleSimple_stmt:
-						next = rule->children[0];
-						break;
-					case Python3Parser::RuleAtom:
-						if(auto test = static_cast <Python3Parser::AtomContext*> (rule)->test()) next = test;
-						break;
-				}
-				if(next == ptr) break;
-				ptr = next;
-			}
-			it = node_cache.emplace(ctx,ptr).first;
-		}
-		return Python3ParserBaseVisitor::visit(it->second);
-	}
-private:
 	bool returning = false;
 	std::any return_value = nullptr;
 	bool isNone(const std::any &x) {
@@ -186,28 +162,32 @@ private:
 		assert(0);
 	}
 	std::any query_value(const std::string &key) {
-		if(!locals.empty()) {
-			auto it = locals.back().find(key);
-			if(it != locals.back().end()) return it->second;
+		if(stk.empty()) {
+			return mp.at(key);
+		}
+		auto it = tmp_mp[stk.back()].find(key);
+		if(it != tmp_mp[stk.back()].end()) {
+			return it->second;
 		}
 		return mp.at(key);
 	}
 	void change_value(const std::string &key, std::any val) {
-		if(locals.empty()) {
+		if(stk.empty()) {
 			mp[key] = std::move(val);
-			return;
 		}
-		auto it = locals.back().find(key);
-		if(it != locals.back().end()) {
-			it->second = std::move(val);
-			return;
+		else {
+            auto it = tmp_mp[stk.back()].find(key);
+		    if(it != tmp_mp[stk.back()].end()) {
+			    it->second = std::move(val);
+				return ;
+		    }
+			auto itt = mp.find(key);
+		    if(itt != mp.end()) {
+			    itt->second = std::move(val);
+				return ;
+		    }
+		    tmp_mp[stk.back()][key] = std::move(val);
 		}
-		auto itt = mp.find(key);
-		if(itt != mp.end()) {
-			itt->second = std::move(val);
-			return;
-		}
-		locals.back()[key] = std::move(val);
 	}
 	std::string deal_string(std::string in) {
 		std::string ret = "";
@@ -404,33 +384,37 @@ private:
 			return toBool(ret);
 		}
 		else if (s != "") {
-            FCT f = mp_f.at(s);
-			const auto &params = mp_args.at(s);
-			std::unordered_map <std::string,std::any> values;
-			values.reserve(params.size());
-			auto args = ctx->trailer()->arglist();
-			int num = 0;
-			if(args) {
-				for(auto arg : args->argument()) {
-					if(arg->ASSIGN() == nullptr) {
-						auto value = visit(arg->test(0));
-						values[params[num++].name] = std::move(value);
-					}
-					else {
-						auto value = visit(arg->test(1));
-						values[node_text(arg->test(0))] = std::move(value);
-					}
+            FCT f = mp_f[s];
+			auto ptr = f.suite;
+			std::string real_name = generate_ID(s);
+			auto args = (ctx->trailer()->arglist());
+			int siz = (args == nullptr ? 0 : (ctx->trailer()->arglist()->argument()).size());
+			int all = (mp_args[s].size()), num = 0;
+			for(int i = 0; i < siz; i++) {
+				if(args->argument(i)->ASSIGN() == nullptr) {
+					std::any value = visit(args->argument(i)->test(0));
+					tmp_mp[real_name][mp_args[s][i].name] = std::move(value);
+					num++;
+				}
+				else {
+					std::any value = visit(args->argument(i)->test(1));
+					tmp_mp[real_name][node_text(args->argument(i)->test(0))] = std::move(value);
 				}
 			}
-			for(int i = num; i < (int)params.size(); i++) {
-				if(values.find(params[i].name) == values.end()) values[params[i].name] = params[i].copy;
+			for(int i = num; i < all; i++) {
+				std::string name = mp_args[s][i].name;
+				auto it = tmp_mp[real_name].find(name);
+				if(it == tmp_mp[real_name].end()) {
+                    tmp_mp[real_name][name] = mp_args[s][i].copy;
+				}
 			}
-			locals.push_back(std::move(values));
-			visit(f.suite);
+			stk.push_back(real_name);
+			visit(ptr);
 			std::any ans = returning ? std::move(return_value) : std::any(nullptr);
 			returning = false;
 			return_value = nullptr;
-			locals.pop_back();
+			tmp_mp.erase(real_name);
+			stk.pop_back();
 			return ans;
 		}
 		return visit(ctx->atom());
@@ -1335,30 +1319,33 @@ private:
 		const auto &stmts = it->second;
 		for(auto stmt : stmts) {
 			visit(stmt);
-			if(returning || jumping) break;
+			if(returning) break;
 		}
 		return nullptr;
 	}
 	std::any visitWhile_stmt(Python3Parser::While_stmtContext *ctx) override {
-		auto test = ctx->test();
-		auto suite = ctx->suite();
-		while(toBool(visit(test))) {
-			visit(suite);
-			if(returning) break;
-			int ret = jumping;
-			jumping = 0;
-			if(ret == 1) break;
+        while(toBool(visit(ctx->test()))) {
+            try {
+				visit(ctx->suite());
+				if(returning) break;
+			}
+			catch(const BreakSignal &) {
+				break;
+			}
+			catch(const ContinueSignal &) {
+				continue;
+			}
 		}
 		return nullptr;
-	}
+    }
 	std::any visitBreak_stmt(Python3Parser::Break_stmtContext *ctx) override {
-		jumping = 1;
+		throw BreakSignal{};
+        return nullptr;
+    }
+    std::any visitContinue_stmt(Python3Parser::Continue_stmtContext *ctx) override {
+        throw ContinueSignal{};
 		return nullptr;
-	}
-	std::any visitContinue_stmt(Python3Parser::Continue_stmtContext *ctx) override {
-		jumping = 2;
-		return nullptr;
-	}
+    }
 	std::any visitTestlist(Python3Parser::TestlistContext *ctx) override {
 		std::vector <std::any> ret{};
 		int siz = (ctx->test()).size();
