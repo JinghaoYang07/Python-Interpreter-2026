@@ -396,7 +396,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 			catch(const ReturnSignal &ret)  {
                 ans = ret.ret;
 			}
-			tmp_mp[real_name].clear();
+			tmp_mp.erase(real_name);
 			stk.pop_back();
 			return ans;
 		}
