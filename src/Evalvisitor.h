@@ -452,8 +452,10 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 		}
 	}
 	std::any visitTerm(Python3Parser::TermContext *ctx) override {
-		auto tmp = visit(ctx->factor(0));
-		if((int)(ctx->factor().size()) == 1) return tmp;
+		auto factors = ctx->factor();
+		auto ops = ctx->muldivmod_op();
+		auto tmp = visit(factors[0]);
+		if((int)(factors.size()) == 1) return tmp;
 		if(std::any_cast <bool> (&tmp)) tmp = int2048(std::any_cast <bool> (tmp)); 
 		bool double_flg = (std::any_cast <double> (&tmp) != nullptr);
         int2048 ret_ll(0); 
@@ -472,8 +474,8 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 				ret_db = std::any_cast <double> (tmp);
 			}
 		}
-		for(int i = 1; i < (int)(ctx->factor().size()); i++) {
-			auto A = visit(ctx->factor(i));
+		for(int i = 1; i < (int)(factors.size()); i++) {
+			auto A = visit(factors[i]);
 			if(std::any_cast <bool> (&A)) A = int2048(std::any_cast <bool> (A)); 
 			if(std::any_cast <std::string> (&A)) {
 				sp_flag = true;
@@ -500,14 +502,14 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 			}
 			if(std::any_cast <int2048> (&A)) {
                 if(double_flg) {
-                    if(ctx->muldivmod_op(i-1)->STAR()) {
+                    if(ops[i-1]->STAR()) {
 						ret_db *= change_double(std::any_cast <int2048> (A));
 					}
-					else if(ctx->muldivmod_op(i-1)->DIV()) {
+					else if(ops[i-1]->DIV()) {
 						int2048 nw = std::any_cast <int2048> (A);
 						ret_db /= change_double(nw);
 					}
-					else if(ctx->muldivmod_op(i-1)->IDIV()) {
+					else if(ops[i-1]->IDIV()) {
                         ret_db /= change_double(std::any_cast <int2048> (A));
 						ret_db = std::floor(ret_db);
 					}
@@ -518,15 +520,15 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					}
 				}
 				else {
-					if(ctx->muldivmod_op(i-1)->STAR()) {
+					if(ops[i-1]->STAR()) {
 						ret_ll *= std::any_cast <int2048> (A);
 					}
-					else if(ctx->muldivmod_op(i-1)->DIV()) {
+					else if(ops[i-1]->DIV()) {
 						int2048 nw = std::any_cast <int2048> (A);
 					    double_flg = true;
 						ret_db = change_double(ret_ll) / change_double(nw);
 					}
-					else if(ctx->muldivmod_op(i-1)->IDIV()) {
+					else if(ops[i-1]->IDIV()) {
                         ret_ll /= std::any_cast <int2048> (A);
 					}
 					else {
@@ -539,14 +541,14 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					ret_db = change_double(ret_ll);
 					double_flg = true;
 				}
-				if(ctx->muldivmod_op(i-1)->STAR()) {
+				if(ops[i-1]->STAR()) {
      				ret_db *= std::any_cast <double> (A);
 				}
-				else if(ctx->muldivmod_op(i-1)->DIV()) {
+				else if(ops[i-1]->DIV()) {
 					auto nw = std::any_cast <double> (A);
 					ret_db /= nw;
 				}
-				else if(ctx->muldivmod_op(i-1)->IDIV()) {
+				else if(ops[i-1]->IDIV()) {
                     ret_db = std::floor(ret_db / std::any_cast <double> (A));
 				}
 				else {
@@ -565,8 +567,10 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 		return ret_ll;
 	}
 	std::any visitArith_expr(Python3Parser::Arith_exprContext *ctx) override {
-	    auto tmp = visit(ctx->term(0));
-		if((int)(ctx->term().size()) == 1) return tmp;
+		auto terms = ctx->term();
+		auto ops = ctx->addorsub_op();
+	    auto tmp = visit(terms[0]);
+		if((int)(terms.size()) == 1) return tmp;
 		if(std::any_cast <bool> (&tmp)) tmp = int2048(std::any_cast <bool> (tmp)); 
 		bool double_flg = (std::any_cast <double> (&tmp) != nullptr);
         int2048 ret_ll(0); 
@@ -581,8 +585,8 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 			if(!double_flg) ret_ll = std::any_cast <int2048> (tmp);
 		    else ret_db = std::any_cast <double> (tmp);
 		}
-		for(int i = 1; i < (int)(ctx->term().size()); i++) {
-			auto A = visit(ctx->term(i));
+		for(int i = 1; i < (int)(terms.size()); i++) {
+			auto A = visit(terms[i]);
 			if(std::any_cast <std::string> (&A)) {
                 sp_ret += std::any_cast <std::string> (A);
 				sp_check = true;
@@ -591,7 +595,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 			if(std::any_cast <bool> (&A)) A = int2048(std::any_cast <bool> (A)); 
 			if(std::any_cast <int2048> (&A)) {
                 if(double_flg) {
-                    if(ctx->addorsub_op(i-1)->ADD()) {
+                    if(ops[i-1]->ADD()) {
 						ret_db += change_double(std::any_cast <int2048> (A));
 					}
 					else {
@@ -599,7 +603,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					}
 				}
 				else {
-					if(ctx->addorsub_op(i-1)->ADD()) {
+					if(ops[i-1]->ADD()) {
 						ret_ll += std::any_cast <int2048> (A);
 					}
 					else {
@@ -612,7 +616,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					ret_db = change_double(ret_ll);
 					double_flg = true;
 				}
-				if(ctx->addorsub_op(i-1)->ADD()) {
+				if(ops[i-1]->ADD()) {
 					ret_db += std::any_cast <double> (A);
 				}
 				else {
@@ -1125,25 +1129,27 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 		return nullptr;
 	}
     std::any visitComparison(Python3Parser::ComparisonContext *ctx) override {
-		if(ctx->arith_expr().size()==1) {
-            return visit(ctx->arith_expr(0));
+		auto exprs = ctx->arith_expr();
+		auto ops = ctx->comp_op();
+		if(exprs.size()==1) {
+            return visit(exprs[0]);
 		}
 		bool Suc = true;
-		int siz = ctx->comp_op().size();
+		int siz = ops.size();
 		std::any lst = nullptr;
 		for(int i = 0; i < siz; i++) {
 			if(!Suc) {
 				break;
 			}
-			std::string s = ctx->comp_op(i)->getText();
+			std::string s = ops[i]->getText();
 			std::any lhs;
 			if(i) {
 				lhs = lst;
 			}
 			else {
-				lhs = visit(ctx->arith_expr(i));
+				lhs = visit(exprs[i]);
 			}
-			auto rhs = visit(ctx->arith_expr(i+1));
+			auto rhs = visit(exprs[i+1]);
 			lst = rhs;
 			if(s == "!=" || s == "==") {
 				if(isNone(lhs)^isNone(rhs)) {
