@@ -39,29 +39,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 	};
 	std::unordered_map <std::string,std::vector<Args>> mp_args;
     std::unordered_map <std::string, FCT> mp_f;
-	struct Frame {
-        std::vector<std::pair<int,std::any>> data;
-        std::unordered_map<int,size_t> index;
-        void reserve(size_t n) { data.reserve(n); }
-        void clear() { data.clear(); index.clear(); }
-        std::any *find(int key) {
-            if(data.size() <= 16) {
-                for(auto &entry : data) if(entry.first == key) return &entry.second;
-                return nullptr;
-            }
-            auto it = index.find(key);
-            return it == index.end() ? nullptr : &data[it->second].second;
-        }
-        void emplace_back(int key,std::any value) {
-            data.emplace_back(key,std::move(value));
-            if(data.size() == 17) {
-                index.reserve(32);
-                for(size_t i = 0; i < data.size(); i++) index.emplace(data[i].first,i);
-            }
-            else if(data.size() > 17) index.emplace(key,data.size()-1);
-        }
-    };
-    std::vector<Frame> locals,spare_frames;
+	std::vector <std::unordered_map<int,std::any>> locals;
 	int jumping = 0;
 	std::unordered_map <Python3Parser::TermContext*, std::pair<std::vector<Python3Parser::FactorContext*>,std::vector<Python3Parser::Muldivmod_opContext*>>> term_cache;
 	std::unordered_map <Python3Parser::Arith_exprContext*, std::pair<std::vector<Python3Parser::TermContext*>,std::vector<Python3Parser::Addorsub_opContext*>>> arith_cache;
@@ -287,7 +265,8 @@ private:
 	}
 	std::any query_value(int key) {
         if(!locals.empty()) {
-            if(auto ptr = locals.back().find(key)) return *ptr;
+            auto it = locals.back().find(key);
+            if(it != locals.back().end()) return it->second;
         }
         assert(globals[key].has_value());
         return globals[key];
@@ -297,15 +276,16 @@ private:
             globals[key] = std::move(val);
             return;
         }
-        if(auto ptr = locals.back().find(key)) {
-            *ptr = std::move(val);
+        auto it = locals.back().find(key);
+        if(it != locals.back().end()) {
+            it->second = std::move(val);
             return;
         }
         if(globals[key].has_value()) {
             globals[key] = std::move(val);
             return;
         }
-        locals.back().emplace_back(key,std::move(val));
+        locals.back()[key] = std::move(val);
     }
 	std::string deal_string(std::string in) {
 		std::string ret = "";
@@ -464,30 +444,23 @@ private:
         if(s == "bool") return toBool(visit(args[0].expr));
         FCT f = mp_f.at(s);
         const auto &params = mp_args.at(s);
-        Frame values;
-        if(!spare_frames.empty()) {
-            values = std::move(spare_frames.back());
-            spare_frames.pop_back();
-        }
+        std::unordered_map<int,std::any> values;
         values.reserve(params.size());
         int num = 0;
         for(const auto &arg : args) {
             auto value = visit(arg.expr);
             int name = arg.name == -1 ? params[num++].name : arg.name;
-            values.emplace_back(name,std::move(value));
+            values[name] = std::move(value);
         }
         for(int i = num; i < (int)params.size(); i++) {
-            if(!values.find(params[i].name)) values.emplace_back(params[i].name,params[i].copy);
+            if(values.find(params[i].name) == values.end()) values[params[i].name] = params[i].copy;
         }
         locals.push_back(std::move(values));
         visit(f.suite);
         std::any ans = returning ? std::move(return_value) : std::any(nullptr);
         returning = false;
         return_value = nullptr;
-        Frame frame = std::move(locals.back());
         locals.pop_back();
-        frame.clear();
-        spare_frames.push_back(std::move(frame));
         return ans;
     }
 	std::any visitFuncdef(Python3Parser::FuncdefContext *ctx) override {
