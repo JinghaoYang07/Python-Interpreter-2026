@@ -39,14 +39,46 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 	};
 	std::unordered_map <std::string,std::vector<Args>> mp_args;
     std::unordered_map <std::string, FCT> mp_f;
-	std::vector <std::unordered_map<int,std::any>> locals;
+	struct Frame {
+        std::vector<std::pair<int,std::any>> data;
+        std::unordered_map<int,size_t> index;
+        void reserve(size_t n) { data.reserve(n); }
+        void clear() { data.clear(); index.clear(); }
+        std::any *find(int key) {
+            if(data.size() <= 16) {
+                for(auto &entry : data) if(entry.first == key) return &entry.second;
+                return nullptr;
+            }
+            auto it = index.find(key);
+            return it == index.end() ? nullptr : &data[it->second].second;
+        }
+        void emplace_back(int key,std::any value) {
+            data.emplace_back(key,std::move(value));
+            if(data.size() == 17) {
+                index.reserve(32);
+                for(size_t i = 0; i < data.size(); i++) index.emplace(data[i].first,i);
+            }
+            else if(data.size() > 17) index.emplace(key,data.size()-1);
+        }
+    };
+    std::vector<Frame> locals,spare_frames;
 	int jumping = 0;
 	std::unordered_map <Python3Parser::TermContext*, std::pair<std::vector<Python3Parser::FactorContext*>,std::vector<Python3Parser::Muldivmod_opContext*>>> term_cache;
 	std::unordered_map <Python3Parser::Arith_exprContext*, std::pair<std::vector<Python3Parser::TermContext*>,std::vector<Python3Parser::Addorsub_opContext*>>> arith_cache;
-	std::unordered_map <Python3Parser::ComparisonContext*, std::pair<std::vector<Python3Parser::Arith_exprContext*>,std::vector<Python3Parser::Comp_opContext*>>> compare_cache;
+    struct CompareInfo {
+        std::vector<Python3Parser::Arith_exprContext*> exprs;
+        std::vector<char> ops;
+    };
+    std::unordered_map<Python3Parser::ComparisonContext*,CompareInfo> compare_cache;
+    std::unordered_map<Python3Parser::If_stmtContext*,std::pair<std::vector<Python3Parser::TestContext*>,std::vector<Python3Parser::SuiteContext*>>> if_cache;
+    std::unordered_map<Python3Parser::FactorContext*,std::pair<antlr4::tree::ParseTree*,char>> factor_cache;
 
 	std::unordered_map <antlr4::tree::ParseTree*, std::string> text_cache;
-	std::unordered_map <antlr4::tree::ParseTree*, antlr4::tree::ParseTree*> node_cache;
+	struct VisitInfo {
+        antlr4::tree::ParseTree *node;
+        size_t rule;
+    };
+    std::unordered_map <antlr4::tree::ParseTree*,VisitInfo> node_cache;
 	struct AtomInfo {
         int name = -1;
         antlr4::tree::ParseTree *expr = nullptr;
@@ -80,7 +112,11 @@ class EvalVisitor : public Python3ParserBaseVisitor {
         op_cache.emplace(ctx,op);
         return op;
     }
-	std::unordered_map <Python3Parser::SuiteContext*, std::vector<Python3Parser::StmtContext*>> suite_cache;
+    struct SuiteInfo {
+        Python3Parser::Simple_stmtContext *simple;
+        std::vector<Python3Parser::StmtContext*> stmts;
+    };
+    std::unordered_map<Python3Parser::SuiteContext*,SuiteInfo> suite_cache;
 	const std::string &node_text(antlr4::tree::ParseTree *ctx) {
 		auto it = text_cache.find(ctx);
 		if(it != text_cache.end()) return it->second;
@@ -120,9 +156,32 @@ public:
 				if(next == ptr) break;
 				ptr = next;
 			}
-			it = node_cache.emplace(ctx,ptr).first;
+			auto rule = dynamic_cast<antlr4::ParserRuleContext*>(ptr);
+            it = node_cache.emplace(ctx,VisitInfo{ptr,rule ? rule->getRuleIndex() : size_t(-1)}).first;
 		}
-		return Python3ParserBaseVisitor::visit(it->second);
+        auto ptr = it->second.node;
+        switch(it->second.rule) {
+            case Python3Parser::RuleAtom: return visitAtom(static_cast<Python3Parser::AtomContext*>(ptr));
+            case Python3Parser::RuleAtom_expr: return visitAtom_expr(static_cast<Python3Parser::Atom_exprContext*>(ptr));
+            case Python3Parser::RuleFactor: return visitFactor(static_cast<Python3Parser::FactorContext*>(ptr));
+            case Python3Parser::RuleTerm: return visitTerm(static_cast<Python3Parser::TermContext*>(ptr));
+            case Python3Parser::RuleArith_expr: return visitArith_expr(static_cast<Python3Parser::Arith_exprContext*>(ptr));
+            case Python3Parser::RuleComparison: return visitComparison(static_cast<Python3Parser::ComparisonContext*>(ptr));
+            case Python3Parser::RuleNot_test: return visitNot_test(static_cast<Python3Parser::Not_testContext*>(ptr));
+            case Python3Parser::RuleAnd_test: return visitAnd_test(static_cast<Python3Parser::And_testContext*>(ptr));
+            case Python3Parser::RuleOr_test: return visitOr_test(static_cast<Python3Parser::Or_testContext*>(ptr));
+            case Python3Parser::RuleExpr_stmt: return visitExpr_stmt(static_cast<Python3Parser::Expr_stmtContext*>(ptr));
+            case Python3Parser::RuleIf_stmt: return visitIf_stmt(static_cast<Python3Parser::If_stmtContext*>(ptr));
+            case Python3Parser::RuleWhile_stmt: return visitWhile_stmt(static_cast<Python3Parser::While_stmtContext*>(ptr));
+            case Python3Parser::RuleSuite: return visitSuite(static_cast<Python3Parser::SuiteContext*>(ptr));
+            case Python3Parser::RuleFuncdef: return visitFuncdef(static_cast<Python3Parser::FuncdefContext*>(ptr));
+            case Python3Parser::RuleReturn_stmt: return visitReturn_stmt(static_cast<Python3Parser::Return_stmtContext*>(ptr));
+            case Python3Parser::RuleBreak_stmt: return visitBreak_stmt(static_cast<Python3Parser::Break_stmtContext*>(ptr));
+            case Python3Parser::RuleContinue_stmt: return visitContinue_stmt(static_cast<Python3Parser::Continue_stmtContext*>(ptr));
+            case Python3Parser::RuleTestlist: return visitTestlist(static_cast<Python3Parser::TestlistContext*>(ptr));
+            case Python3Parser::RuleFormat_string: return visitFormat_string(static_cast<Python3Parser::Format_stringContext*>(ptr));
+            default: return Python3ParserBaseVisitor::visit(ptr);
+        }
 	}
 private:
 	bool returning = false;
@@ -228,8 +287,7 @@ private:
 	}
 	std::any query_value(int key) {
         if(!locals.empty()) {
-            auto it = locals.back().find(key);
-            if(it != locals.back().end()) return it->second;
+            if(auto ptr = locals.back().find(key)) return *ptr;
         }
         assert(globals[key].has_value());
         return globals[key];
@@ -239,16 +297,15 @@ private:
             globals[key] = std::move(val);
             return;
         }
-        auto it = locals.back().find(key);
-        if(it != locals.back().end()) {
-            it->second = std::move(val);
+        if(auto ptr = locals.back().find(key)) {
+            *ptr = std::move(val);
             return;
         }
         if(globals[key].has_value()) {
             globals[key] = std::move(val);
             return;
         }
-        locals.back()[key] = std::move(val);
+        locals.back().emplace_back(key,std::move(val));
     }
 	std::string deal_string(std::string in) {
 		std::string ret = "";
@@ -407,23 +464,30 @@ private:
         if(s == "bool") return toBool(visit(args[0].expr));
         FCT f = mp_f.at(s);
         const auto &params = mp_args.at(s);
-        std::unordered_map<int,std::any> values;
+        Frame values;
+        if(!spare_frames.empty()) {
+            values = std::move(spare_frames.back());
+            spare_frames.pop_back();
+        }
         values.reserve(params.size());
         int num = 0;
         for(const auto &arg : args) {
             auto value = visit(arg.expr);
             int name = arg.name == -1 ? params[num++].name : arg.name;
-            values[name] = std::move(value);
+            values.emplace_back(name,std::move(value));
         }
         for(int i = num; i < (int)params.size(); i++) {
-            if(values.find(params[i].name) == values.end()) values[params[i].name] = params[i].copy;
+            if(!values.find(params[i].name)) values.emplace_back(params[i].name,params[i].copy);
         }
         locals.push_back(std::move(values));
         visit(f.suite);
         std::any ans = returning ? std::move(return_value) : std::any(nullptr);
         returning = false;
         return_value = nullptr;
+        Frame frame = std::move(locals.back());
         locals.pop_back();
+        frame.clear();
+        spare_frames.push_back(std::move(frame));
         return ans;
     }
 	std::any visitFuncdef(Python3Parser::FuncdefContext *ctx) override {
@@ -444,38 +508,23 @@ private:
 		}
 		return nullptr;
     }
-	std::any visitFactor(Python3Parser::FactorContext *ctx) override {
-		if(ctx->MINUS() == nullptr && ctx->ADD() == nullptr) {
-			if(ctx->factor()) return visit(ctx->factor());
-			return visit(ctx->atom_expr());
-		}
-		if(ctx->MINUS() == nullptr) {
-            if(ctx->factor()) {
-				auto ret = visit(ctx->factor());
-				if(std::any_cast <bool> (&ret)) {
-					ret = (int2048)(std::any_cast <bool> (ret));
-				}
-				return ret;
-			}
-			auto ret = visit(ctx->atom_expr());
-			if(std::any_cast <bool> (&ret)) {
-				ret = (int2048)(std::any_cast <bool> (ret));
-			}
-			return ret;
-		}
-		else {
-			std::any tmp;
-            if(ctx->factor()) tmp = visit(ctx->factor());
-			else tmp = visit(ctx->atom_expr());
-			if(std::any_cast <int2048> (&tmp)) {
-				return -(std::any_cast <const int2048&> (tmp));
-			}
-			if(std::any_cast <bool> (&tmp)) {
-				return -(int2048)(std::any_cast <bool> (tmp));
-			}
-			return -(std::any_cast <double> (tmp));
-		}
-	}
+    std::any visitFactor(Python3Parser::FactorContext *ctx) override {
+        auto it = factor_cache.find(ctx);
+        if(it == factor_cache.end()) {
+            antlr4::tree::ParseTree *expr = ctx->factor();
+            if(!expr) expr = ctx->atom_expr();
+            char op = ctx->MINUS() ? '-' : (ctx->ADD() ? '+' : 0);
+            it = factor_cache.emplace(ctx,std::make_pair(expr,op)).first;
+        }
+        auto info = it->second;
+        auto ret = visit(info.first);
+        if(info.second && isBool(ret)) ret = int2048(std::any_cast<bool>(ret));
+        if(info.second == '-') {
+            if(auto ptr = std::any_cast<int2048>(&ret)) *ptr = -*ptr;
+            else ret = -std::any_cast<double>(ret);
+        }
+        return ret;
+    }
 	std::any visitTerm(Python3Parser::TermContext *ctx) override {
 		auto it = term_cache.find(ctx);
 		if(it == term_cache.end()) it = term_cache.emplace(ctx,std::make_pair(ctx->factor(),ctx->muldivmod_op())).first;
@@ -752,123 +801,48 @@ private:
         }
         return nullptr;
     }
+    template<class T> bool compare_value(const T &a,const T &b,char op) {
+        if(op == '=') return a == b;
+        if(op == '!') return a != b;
+        if(op == '<') return a < b;
+        if(op == '>') return a > b;
+        if(op == 'l') return a <= b;
+        return a >= b;
+    }
+    bool compare_value(const std::any &lhs,const std::any &rhs,char op) {
+        if(isNone(lhs) || isNone(rhs)) return isNone(lhs) && isNone(rhs) && op == '=';
+        if(isString(lhs) || isString(rhs)) {
+            if(!isString(lhs) || !isString(rhs)) return false;
+            return compare_value(std::any_cast<const std::string&>(lhs),std::any_cast<const std::string&>(rhs),op);
+        }
+        if(isDouble(lhs) || isDouble(rhs)) return compare_value(toDouble(lhs),toDouble(rhs),op);
+        return compare_value(integer_value(lhs),integer_value(rhs),op);
+    }
     std::any visitComparison(Python3Parser::ComparisonContext *ctx) override {
-		auto it = compare_cache.find(ctx);
-		if(it == compare_cache.end()) it = compare_cache.emplace(ctx,std::make_pair(ctx->arith_expr(),ctx->comp_op())).first;
-		const auto &exprs = it->second.first;
-		const auto &ops = it->second.second;
-		if(exprs.size()==1) {
-            return visit(exprs[0]);
-		}
-		bool Suc = true;
-		int siz = ops.size();
-		std::any lst = nullptr;
-		for(int i = 0; i < siz; i++) {
-			if(!Suc) {
-				break;
-			}
-			const std::string &s = node_text(ops[i]);
-			std::any lhs;
-			if(i) {
-				lhs = std::move(lst);
-			}
-			else {
-				lhs = visit(exprs[i]);
-			}
-			auto rhs = visit(exprs[i+1]);
-			lst = rhs;
-			if(s == "!=" || s == "==") {
-				if(isNone(lhs)^isNone(rhs)) {
-					return (bool)(false);
-				}
-				if(isString(lhs)^isString(rhs)) {
-					return (bool)(false);
-				}
-                if(isNone(lhs)) {
-					Suc &= (s == "==" ? (bool)(true) : (bool) (false));
-					continue;
-				}
-				if(isString(lhs)) {
-					bool flg = (std::any_cast <const std::string&> (lhs) == std::any_cast <const std::string&> (rhs));
-					Suc &= (s == "==" ? flg : !flg);
-					continue;
-				}
-				bool double_flg = false;
-				if(isDouble(lhs)||isDouble(rhs)) {
-					double_flg = true;
-				}
-				if(double_flg) {
-					if(s == "==") {
-						Suc &= (toDouble(lhs) == toDouble(rhs));
-					}
-					else {
-						Suc &= ((toDouble(lhs)) != toDouble(rhs));
-					}
-				}
-				else {
-                    if(s == "==") {
-						Suc &= (integer_value(lhs) == integer_value(rhs));
-					}
-					else {
-						Suc &= (integer_value(lhs) != integer_value(rhs));
-					}
-				}
-			}
-			else if(s == "<=") {
-				if(isString(lhs)||isString(rhs)) {
-					Suc &= (std::any_cast <const std::string&> (lhs) <= std::any_cast <const std::string&> (rhs));
-				}
-				else {
-					if(isDouble(lhs)||isDouble(rhs)) {
-						Suc &= (toDouble(lhs) <= toDouble(rhs));
-					}
-					else {
-						Suc &= (integer_value(lhs) <= integer_value(rhs));
-					}
-				}
-			}
-			else if(s == ">=") {
-				if(isString(lhs)||isString(rhs)) {
-					Suc &= (std::any_cast <const std::string&> (lhs) >= std::any_cast <const std::string&> (rhs));
-				}
-				else {
-					if(isDouble(lhs)||isDouble(rhs)) {
-						Suc &= (toDouble(lhs) >= toDouble(rhs));
-					}
-					else {
-						Suc &= (integer_value(lhs) >= integer_value(rhs));
-					}
-				}
-			}
-			else if(s == "<") {
-				if(isString(lhs)||isString(rhs)) {
-					Suc &= (std::any_cast <const std::string&> (lhs) < std::any_cast <const std::string&> (rhs));
-				}
-				else {
-					if(isDouble(lhs)||isDouble(rhs)) {
-						Suc &= (toDouble(lhs) < toDouble(rhs));
-					}
-					else {
-						Suc &= (integer_value(lhs) < integer_value(rhs));
-					}
-				}
-			}
-			else if(s == ">") {
-				if(isString(lhs)||isString(rhs)) {
-					Suc &= (std::any_cast <const std::string&> (lhs) > std::any_cast <const std::string&> (rhs));
-				}
-				else {
-					if(isDouble(lhs)||isDouble(rhs)) {
-						Suc &= (toDouble(lhs) > toDouble(rhs));
-					}
-					else {
-						Suc &= (integer_value(lhs) > integer_value(rhs));
-					}
-				}
-			}
-		}
-		return Suc;
-	}
+        auto it = compare_cache.find(ctx);
+        if(it == compare_cache.end()) {
+            CompareInfo info;
+            info.exprs = ctx->arith_expr();
+            for(auto ptr : ctx->comp_op()) {
+                const auto &s = node_text(ptr);
+                char op = s[0];
+                if(s == "<=") op = 'l';
+                if(s == ">=") op = 'g';
+                info.ops.push_back(op);
+            }
+            it = compare_cache.emplace(ctx,std::move(info)).first;
+        }
+        const auto &exprs = it->second.exprs;
+        const auto &ops = it->second.ops;
+        auto lhs = visit(exprs[0]);
+        if(ops.empty()) return lhs;
+        for(int i = 0; i < (int)ops.size(); i++) {
+            auto rhs = visit(exprs[i+1]);
+            if(!compare_value(lhs,rhs,ops[i])) return false;
+            lhs = std::move(rhs);
+        }
+        return true;
+    }
 	std::any visitNot_test(Python3Parser::Not_testContext *ctx) override {
 		if(ctx->not_test()) {
 			return !toBool(visit(ctx->not_test()));
@@ -908,31 +882,30 @@ private:
 		return false;
 	}
     std::any visitIf_stmt(Python3Parser::If_stmtContext *ctx) override {
-        int siz = (ctx->test()).size();
-		for(int i = 0; i < siz; i++) {
-			bool ret = toBool(visit(ctx->test(i)));
-			if(ret == true) {
-                visit(ctx->suite(i));
-				return nullptr;
-			}
-		}
-		if((ctx->suite()).size() == siz) {
-			return nullptr;
-		}
-		visit(ctx->suite(siz));
-		return nullptr;
+        auto it = if_cache.find(ctx);
+        if(it == if_cache.end()) it = if_cache.emplace(ctx,std::make_pair(ctx->test(),ctx->suite())).first;
+        const auto &tests = it->second.first;
+        const auto &suites = it->second.second;
+        for(int i = 0; i < (int)tests.size(); i++) {
+            if(toBool(visit(tests[i]))) {
+                visit(suites[i]);
+                return nullptr;
+            }
+        }
+        if(suites.size() > tests.size()) visit(suites.back());
+        return nullptr;
     }
-	std::any visitSuite(Python3Parser::SuiteContext *ctx) override {
-		if(ctx->simple_stmt()) return visit(ctx->simple_stmt());
-		auto it = suite_cache.find(ctx);
-		if(it == suite_cache.end()) it = suite_cache.emplace(ctx,ctx->stmt()).first;
-		const auto &stmts = it->second;
-		for(auto stmt : stmts) {
-			visit(stmt);
-			if(returning || jumping) break;
-		}
-		return nullptr;
-	}
+    std::any visitSuite(Python3Parser::SuiteContext *ctx) override {
+        auto it = suite_cache.find(ctx);
+        if(it == suite_cache.end()) it = suite_cache.emplace(ctx,SuiteInfo{ctx->simple_stmt(),ctx->stmt()}).first;
+        if(it->second.simple) return visit(it->second.simple);
+        const auto &stmts = it->second.stmts;
+        for(auto stmt : stmts) {
+            visit(stmt);
+            if(returning || jumping) break;
+        }
+        return nullptr;
+    }
 	std::any visitWhile_stmt(Python3Parser::While_stmtContext *ctx) override {
 		auto test = ctx->test();
 		auto suite = ctx->suite();
