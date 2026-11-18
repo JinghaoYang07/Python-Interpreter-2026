@@ -17,52 +17,114 @@
 using int2048 = sjtu::int2048;
 
 class EvalVisitor : public Python3ParserBaseVisitor {
-    std::unordered_map<Python3Parser::Expr_stmtContext*,std::vector<std::vector<Python3Parser::TestContext*>>> assign_cache;
+    struct ExprInfo {
+        std::vector<std::vector<Python3Parser::TestContext*>> lists;
+        std::vector<std::vector<int>> names;
+        char op = 0;
+    };
+    std::unordered_map<Python3Parser::Expr_stmtContext*,ExprInfo> assign_cache;
     std::unordered_map<Python3Parser::And_testContext*,std::vector<Python3Parser::Not_testContext*>> and_cache;
     std::unordered_map<Python3Parser::Or_testContext*,std::vector<Python3Parser::And_testContext*>> or_cache;
 	// TODO: override all methods of Python3ParserBaseVisitor
-	std::map <std::string, std::any> mp;
+	std::unordered_map <std::string,int> symbol_ids;
+	std::vector <std::any> globals;
 	struct FCT {
         Python3Parser::ParametersContext *parameters;
         Python3Parser::SuiteContext *suite;
 	};
 	struct Args {
-        std::string name;
+        int name;
 		bool Initial;
 		std::any copy;
 	};
-	std::map <std::string,std::vector<Args>> mp_args;
-    std::map <std::string, FCT> mp_f;
-	std::map <std::string, std::map <std::string, std::any>> tmp_mp;
-	std::map <std::string, long long> tims;
-	std::string generate_ID(std::string name) {
-		long long nw = ++tims[name];
-		std::string s = name, oth = "";
-		s += '#';
-        while(nw) {
-			oth += nw % 10;
-			nw /= 10;
-		}
-		for(int i = (int)oth.size() - 1; i >= 0; i--) {
-			s += oth[i];
-		}
-		return s;
-	}
-	std::vector <std::string> stk;
-	struct BreakSignal {};
-	struct ContinueSignal {};
+	std::unordered_map <std::string,std::vector<Args>> mp_args;
+    std::unordered_map <std::string, FCT> mp_f;
+	std::vector <std::unordered_map<int,std::any>> locals;
+	int jumping = 0;
 	std::unordered_map <Python3Parser::TermContext*, std::pair<std::vector<Python3Parser::FactorContext*>,std::vector<Python3Parser::Muldivmod_opContext*>>> term_cache;
 	std::unordered_map <Python3Parser::Arith_exprContext*, std::pair<std::vector<Python3Parser::TermContext*>,std::vector<Python3Parser::Addorsub_opContext*>>> arith_cache;
 	std::unordered_map <Python3Parser::ComparisonContext*, std::pair<std::vector<Python3Parser::Arith_exprContext*>,std::vector<Python3Parser::Comp_opContext*>>> compare_cache;
 
 	std::unordered_map <antlr4::tree::ParseTree*, std::string> text_cache;
-	std::unordered_map <Python3Parser::AtomContext*, std::any> literal_cache;
+	std::unordered_map <antlr4::tree::ParseTree*, antlr4::tree::ParseTree*> node_cache;
+	struct AtomInfo {
+        int name = -1;
+        antlr4::tree::ParseTree *expr = nullptr;
+        std::any value = nullptr;
+    };
+	struct CallArg {
+        int name;
+        Python3Parser::TestContext *expr;
+    };
+	struct CallInfo {
+        std::string name;
+        std::vector<CallArg> args;
+    };
+	std::unordered_map <Python3Parser::AtomContext*,AtomInfo> atom_cache;
+	std::unordered_map <Python3Parser::Atom_exprContext*,CallInfo> call_cache;
+	std::unordered_map <antlr4::tree::ParseTree*,char> op_cache;
+	int symbol(const std::string &name) {
+        auto it = symbol_ids.find(name);
+        if(it != symbol_ids.end()) return it->second;
+        int id = globals.size();
+        symbol_ids.emplace(name,id);
+        globals.emplace_back();
+        return id;
+    }
+	char operation(antlr4::tree::ParseTree *ctx) {
+        auto it = op_cache.find(ctx);
+        if(it != op_cache.end()) return it->second;
+        const auto &s = node_text(ctx);
+        char op = s[0];
+        if(s == "//" || s == "//=") op = 'D';
+        op_cache.emplace(ctx,op);
+        return op;
+    }
 	std::unordered_map <Python3Parser::SuiteContext*, std::vector<Python3Parser::StmtContext*>> suite_cache;
 	const std::string &node_text(antlr4::tree::ParseTree *ctx) {
 		auto it = text_cache.find(ctx);
 		if(it != text_cache.end()) return it->second;
 		return text_cache.emplace(ctx,ctx->getText()).first->second;
 	}
+public:
+	std::any visit(antlr4::tree::ParseTree *ctx) override {
+		auto it = node_cache.find(ctx);
+		if(it == node_cache.end()) {
+			auto ptr = ctx;
+			while(auto rule = dynamic_cast <antlr4::ParserRuleContext*> (ptr)) {
+				auto next = ptr;
+				switch(rule->getRuleIndex()) {
+					case Python3Parser::RuleTest:
+					case Python3Parser::RuleOr_test:
+					case Python3Parser::RuleAnd_test:
+					case Python3Parser::RuleNot_test:
+					case Python3Parser::RuleComparison:
+					case Python3Parser::RuleArith_expr:
+					case Python3Parser::RuleTerm:
+					case Python3Parser::RuleFactor:
+					case Python3Parser::RuleAtom_expr:
+					case Python3Parser::RuleArgument:
+					case Python3Parser::RuleStmt:
+					case Python3Parser::RuleSmall_stmt:
+					case Python3Parser::RuleCompound_stmt:
+					case Python3Parser::RuleFlow_stmt:
+						if(rule->children.size() == 1) next = rule->children[0];
+						break;
+					case Python3Parser::RuleSimple_stmt:
+						next = rule->children[0];
+						break;
+					case Python3Parser::RuleAtom:
+						if(auto test = static_cast <Python3Parser::AtomContext*> (rule)->test()) next = test;
+						break;
+				}
+				if(next == ptr) break;
+				ptr = next;
+			}
+			it = node_cache.emplace(ctx,ptr).first;
+		}
+		return Python3ParserBaseVisitor::visit(it->second);
+	}
+private:
 	bool returning = false;
 	std::any return_value = nullptr;
 	bool isNone(const std::any &x) {
@@ -164,34 +226,30 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 		}
 		assert(0);
 	}
-	std::any query_value(const std::string &key) {
-		if(stk.empty()) {
-			return mp.at(key);
-		}
-		auto it = tmp_mp[stk.back()].find(key);
-		if(it != tmp_mp[stk.back()].end()) {
-			return it->second;
-		}
-		return mp.at(key);
-	}
-	void change_value(const std::string &key, std::any val) {
-		if(stk.empty()) {
-			mp[key] = std::move(val);
-		}
-		else {
-            auto it = tmp_mp[stk.back()].find(key);
-		    if(it != tmp_mp[stk.back()].end()) {
-			    it->second = std::move(val);
-				return ;
-		    }
-			auto itt = mp.find(key);
-		    if(itt != mp.end()) {
-			    itt->second = std::move(val);
-				return ;
-		    }
-		    tmp_mp[stk.back()][key] = std::move(val);
-		}
-	}
+	std::any query_value(int key) {
+        if(!locals.empty()) {
+            auto it = locals.back().find(key);
+            if(it != locals.back().end()) return it->second;
+        }
+        assert(globals[key].has_value());
+        return globals[key];
+    }
+	void change_value(int key,std::any val) {
+        if(locals.empty()) {
+            globals[key] = std::move(val);
+            return;
+        }
+        auto it = locals.back().find(key);
+        if(it != locals.back().end()) {
+            it->second = std::move(val);
+            return;
+        }
+        if(globals[key].has_value()) {
+            globals[key] = std::move(val);
+            return;
+        }
+        locals.back()[key] = std::move(val);
+    }
 	std::string deal_string(std::string in) {
 		std::string ret = "";
 		for(int i = 1; i < (int)(in.size()) - 1; i++) {
@@ -286,142 +344,88 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 		return ret;
 	}
 	std::any visitAtom(Python3Parser::AtomContext *ctx) override {
-		auto it = literal_cache.find(ctx);
-		if(it != literal_cache.end()) return it->second;
-		if(ctx->NAME()) {
-            //变量赋值？
-			const std::string &s = node_text(ctx->NAME());
-			return query_value(s);
-		}
-		else if(ctx->NUMBER()) {
-            const std::string &s = node_text(ctx->NUMBER());
-			bool fd = false;
-			for(int i = 0; i < (int)(s.size()); i++) {
-				if(s[i] == '.') {
-					fd = true;
-					break;
-				}
-			}
-			if(fd) return literal_cache.emplace(ctx,std::stod(s)).first->second;
-			return literal_cache.emplace(ctx,int2048(s)).first->second;
-		}
-		else if(ctx->NONE()) {
-            return nullptr;
-		}
-		else if(ctx->TRUE()) {
-            return true;
-		}
-		else if(ctx->FALSE()) {
-            return false;
-		}
-		else if(ctx->test()) {
-            return visit(ctx->test());
-		}
-		else if(ctx->format_string()) {
-			return visit(ctx->format_string());
-		}
-		std::string ret = "";
-		for(int i = 0; i < (int)(ctx->STRING().size()); i++) {
-			ret += deal_string(node_text(ctx->STRING(i)));
-		}
-		return literal_cache.emplace(ctx,std::move(ret)).first->second;
-	}
+        auto it = atom_cache.find(ctx);
+        if(it == atom_cache.end()) {
+            AtomInfo info;
+            if(auto ptr = ctx->NAME()) info.name = symbol(node_text(ptr));
+            else if(auto ptr = ctx->NUMBER()) {
+                const auto &s = node_text(ptr);
+                if(s.find('.') != std::string::npos) info.value = std::stod(s);
+                else info.value = int2048(s);
+            }
+            else if(ctx->NONE()) info.value = nullptr;
+            else if(ctx->TRUE()) info.value = true;
+            else if(ctx->FALSE()) info.value = false;
+            else if(auto ptr = ctx->test()) info.expr = ptr;
+            else if(auto ptr = ctx->format_string()) info.expr = ptr;
+            else {
+                std::string ret;
+                for(auto ptr : ctx->STRING()) ret += deal_string(node_text(ptr));
+                info.value = std::move(ret);
+            }
+            it = atom_cache.emplace(ctx,std::move(info)).first;
+        }
+        if(it->second.name != -1) return query_value(it->second.name);
+        if(it->second.expr) return visit(it->second.expr);
+        return it->second.value;
+    }
 	std::any visitAtom_expr(Python3Parser::Atom_exprContext *ctx) override {
-		if(ctx->trailer() == nullptr) {
-			return visit(ctx->atom());
-		}
-		const std::string &s = node_text(ctx->atom()->NAME());
-		if(s == "print") {
-			auto args = ctx->trailer()->arglist();
-			if(args == nullptr) {
-                std::cout<< '\n';
-				return nullptr;
-			}
-			bool flg = false;
-			for(auto nw:args->argument()) {
-				if(flg) {
-					std::cout << " ";
-				}
-				else {
-					flg = true;
-				}
-				std::any out = visit(nw);
-				if(auto p = std::any_cast <int2048> (&out)) {
-					std::cout << (*p);
-				}
-				else if(auto p = std::any_cast <double> (&out)) {
-					printf("%.6lf", (*p));
-				}
-				else if(auto p = std::any_cast <bool> (&out)) {
-					if((*p) == true) {
-						std::cout << "True";
-					}
-					else {
-						std::cout << "False";
-					}
-				}
-				else if(auto p = std::any_cast <std::string> (&out)) {
-					std::cout << (*p);
-				}
-				else {
-					std::cout << "None";
-				}
-			}
-			std::cout << '\n';
-			return nullptr;
-		}
-		else if (s == "str") {
-			auto ret = visit(ctx->trailer()->arglist()->argument(0)->test(0));
-			return toString(ret);
-		}
-		else if (s == "int") {
-            auto ret = visit(ctx->trailer()->arglist()->argument(0)->test(0));
-			return toInt2048(ret);
-		}
-		else if (s == "float") {
-            auto ret = visit(ctx->trailer()->arglist()->argument(0)->test(0));
-			return toDouble(ret);
-		}
-		else if (s == "bool") {
-            auto ret = visit(ctx->trailer()->arglist()->argument(0)->test(0));
-			return toBool(ret);
-		}
-		else if (s != "") {
-            FCT f = mp_f[s];
-			auto ptr = f.suite;
-			std::string real_name = generate_ID(s);
-			auto args = (ctx->trailer()->arglist());
-			int siz = (args == nullptr ? 0 : (ctx->trailer()->arglist()->argument()).size());
-			int all = (mp_args[s].size()), num = 0;
-			for(int i = 0; i < siz; i++) {
-				if(args->argument(i)->ASSIGN() == nullptr) {
-					std::any value = visit(args->argument(i)->test(0));
-					tmp_mp[real_name][mp_args[s][i].name] = std::move(value);
-					num++;
-				}
-				else {
-					std::any value = visit(args->argument(i)->test(1));
-					tmp_mp[real_name][node_text(args->argument(i)->test(0))] = std::move(value);
-				}
-			}
-			for(int i = num; i < all; i++) {
-				std::string name = mp_args[s][i].name;
-				auto it = tmp_mp[real_name].find(name);
-				if(it == tmp_mp[real_name].end()) {
-                    tmp_mp[real_name][name] = mp_args[s][i].copy;
-				}
-			}
-			stk.push_back(real_name);
-			visit(ptr);
-			std::any ans = returning ? std::move(return_value) : std::any(nullptr);
-			returning = false;
-			return_value = nullptr;
-			tmp_mp.erase(real_name);
-			stk.pop_back();
-			return ans;
-		}
-		return visit(ctx->atom());
-	}
+        auto it = call_cache.find(ctx);
+        if(it == call_cache.end()) {
+            auto trailer = ctx->trailer();
+            if(!trailer) return visit(ctx->atom());
+            CallInfo info;
+            info.name = node_text(ctx->atom()->NAME());
+            if(auto args = trailer->arglist()) {
+                for(auto arg : args->argument()) {
+                    if(arg->ASSIGN()) info.args.push_back({symbol(node_text(arg->test(0))),arg->test(1)});
+                    else info.args.push_back({-1,arg->test(0)});
+                }
+            }
+            it = call_cache.emplace(ctx,std::move(info)).first;
+        }
+        const auto &s = it->second.name;
+        const auto &args = it->second.args;
+        if(s == "print") {
+            bool flg = false;
+            for(const auto &arg : args) {
+                if(flg) std::cout << ' ';
+                flg = true;
+                auto out = visit(arg.expr);
+                if(auto ptr = std::any_cast<int2048>(&out)) std::cout << *ptr;
+                else if(auto ptr = std::any_cast<double>(&out)) printf("%.6lf",*ptr);
+                else if(auto ptr = std::any_cast<bool>(&out)) std::cout << (*ptr ? "True" : "False");
+                else if(auto ptr = std::any_cast<std::string>(&out)) std::cout << *ptr;
+                else std::cout << "None";
+            }
+            std::cout << '\n';
+            return nullptr;
+        }
+        if(s == "str") return toString(visit(args[0].expr));
+        if(s == "int") return toInt2048(visit(args[0].expr));
+        if(s == "float") return toDouble(visit(args[0].expr));
+        if(s == "bool") return toBool(visit(args[0].expr));
+        FCT f = mp_f.at(s);
+        const auto &params = mp_args.at(s);
+        std::unordered_map<int,std::any> values;
+        values.reserve(params.size());
+        int num = 0;
+        for(const auto &arg : args) {
+            auto value = visit(arg.expr);
+            int name = arg.name == -1 ? params[num++].name : arg.name;
+            values[name] = std::move(value);
+        }
+        for(int i = num; i < (int)params.size(); i++) {
+            if(values.find(params[i].name) == values.end()) values[params[i].name] = params[i].copy;
+        }
+        locals.push_back(std::move(values));
+        visit(f.suite);
+        std::any ans = returning ? std::move(return_value) : std::any(nullptr);
+        returning = false;
+        return_value = nullptr;
+        locals.pop_back();
+        return ans;
+    }
 	std::any visitFuncdef(Python3Parser::FuncdefContext *ctx) override {
         std::string name = node_text(ctx->NAME());
 		mp_f[name].parameters = ctx->parameters();
@@ -432,10 +436,10 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 		int init = (all == 0 ? 0 : (args->test()).size()), pos = 0;
 		for(int i = 0; i < all; i++) {
 			if(i < all - init) {
-                mp_args[name].push_back({node_text(args->tfpdef(i)->NAME()), false, nullptr});
+                mp_args[name].push_back({symbol(node_text(args->tfpdef(i)->NAME())), false, nullptr});
 			}
 			else {
-                mp_args[name].push_back({node_text(args->tfpdef(i)->NAME()), true, visit(args->test(pos++))});
+                mp_args[name].push_back({symbol(node_text(args->tfpdef(i)->NAME())), true, visit(args->test(pos++))});
 			}
 		}
 		return nullptr;
@@ -491,7 +495,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 		}
 		else {
 			if(!double_flg) {
-				ret_ll = std::any_cast <const int2048&> (tmp);
+				ret_ll = std::move(std::any_cast <int2048&> (tmp));
 			}
 	    	else {
 				ret_db = std::any_cast <double> (tmp);
@@ -499,6 +503,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 		}
 		for(int i = 1; i < (int)(factors.size()); i++) {
 			auto A = visit(factors[i]);
+            char op = operation(ops[i-1]);
 			if(std::any_cast <bool> (&A)) A = int2048(std::any_cast <bool> (A)); 
 			if(std::any_cast <std::string> (&A)) {
 				sp_flag = true;
@@ -525,14 +530,14 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 			}
 			if(std::any_cast <int2048> (&A)) {
                 if(double_flg) {
-                    if(ops[i-1]->STAR()) {
+                    if(op == '*') {
 						ret_db *= change_double(std::any_cast <const int2048&> (A));
 					}
-					else if(ops[i-1]->DIV()) {
+					else if(op == '/') {
 						int2048 nw = std::any_cast <const int2048&> (A);
 						ret_db /= change_double(nw);
 					}
-					else if(ops[i-1]->IDIV()) {
+					else if(op == 'D') {
                         ret_db /= change_double(std::any_cast <const int2048&> (A));
 						ret_db = std::floor(ret_db);
 					}
@@ -543,15 +548,15 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					}
 				}
 				else {
-					if(ops[i-1]->STAR()) {
+					if(op == '*') {
 						ret_ll *= std::any_cast <const int2048&> (A);
 					}
-					else if(ops[i-1]->DIV()) {
+					else if(op == '/') {
 						int2048 nw = std::any_cast <const int2048&> (A);
 					    double_flg = true;
 						ret_db = change_double(ret_ll) / change_double(nw);
 					}
-					else if(ops[i-1]->IDIV()) {
+					else if(op == 'D') {
                         ret_ll /= std::any_cast <const int2048&> (A);
 					}
 					else {
@@ -564,14 +569,14 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					ret_db = change_double(ret_ll);
 					double_flg = true;
 				}
-				if(ops[i-1]->STAR()) {
+				if(op == '*') {
      				ret_db *= std::any_cast <double> (A);
 				}
-				else if(ops[i-1]->DIV()) {
+				else if(op == '/') {
 					auto nw = std::any_cast <double> (A);
 					ret_db /= nw;
 				}
-				else if(ops[i-1]->IDIV()) {
+				else if(op == 'D') {
                     ret_db = std::floor(ret_db / std::any_cast <double> (A));
 				}
 				else {
@@ -607,11 +612,12 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 			sp_check = true;
 		}
 		else {
-			if(!double_flg) ret_ll = std::any_cast <const int2048&> (tmp);
+			if(!double_flg) ret_ll = std::move(std::any_cast <int2048&> (tmp));
 		    else ret_db = std::any_cast <double> (tmp);
 		}
 		for(int i = 1; i < (int)(terms.size()); i++) {
 			auto A = visit(terms[i]);
+            char op = operation(ops[i-1]);
 			if(std::any_cast <std::string> (&A)) {
                 sp_ret += std::any_cast <const std::string&> (A);
 				sp_check = true;
@@ -620,7 +626,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 			if(std::any_cast <bool> (&A)) A = int2048(std::any_cast <bool> (A)); 
 			if(std::any_cast <int2048> (&A)) {
                 if(double_flg) {
-                    if(ops[i-1]->ADD()) {
+                    if(op == '+') {
 						ret_db += change_double(std::any_cast <const int2048&> (A));
 					}
 					else {
@@ -628,7 +634,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					}
 				}
 				else {
-					if(ops[i-1]->ADD()) {
+					if(op == '+') {
 						ret_ll += std::any_cast <const int2048&> (A);
 					}
 					else {
@@ -641,7 +647,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					ret_db = change_double(ret_ll);
 					double_flg = true;
 				}
-				if(ops[i-1]->ADD()) {
+				if(op == '+') {
 					ret_db += std::any_cast <double> (A);
 				}
 				else {
@@ -657,510 +663,95 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 		}
 		return ret_ll;
 	}
+	std::any binary_value(std::any lhs,const std::any &rhs,char op) {
+        if(isString(lhs) || isString(rhs)) {
+            if(op == '+') {
+                auto &ret = std::any_cast<std::string&>(lhs);
+                ret += std::any_cast<const std::string&>(rhs);
+                return lhs;
+            }
+            const auto &text = isString(lhs) ? std::any_cast<const std::string&>(lhs) : std::any_cast<const std::string&>(rhs);
+            long long times = change_ll(integer_value(isString(lhs) ? rhs : lhs));
+            std::string ret;
+            if(times > 0 && !text.empty()) {
+                ret.reserve(text.size()*times);
+                while(times--) ret += text;
+            }
+            return ret;
+        }
+        if(op == '/' || isDouble(lhs) || isDouble(rhs)) {
+            double a = toDouble(lhs),b = toDouble(rhs);
+            if(op == '+') return a+b;
+            if(op == '-') return a-b;
+            if(op == '*') return a*b;
+            if(op == '/') return a/b;
+            if(op == 'D') return std::floor(a/b);
+            return a-std::floor(a/b)*b;
+        }
+        if(isBool(lhs)) lhs = int2048(std::any_cast<bool>(lhs));
+        auto &a = std::any_cast<int2048&>(lhs);
+        const auto &b = integer_value(rhs);
+        if(op == '+') a += b;
+        else if(op == '-') a -= b;
+        else if(op == '*') a *= b;
+        else if(op == 'D') a /= b;
+        else a %= b;
+        return lhs;
+    }
 	std::any visitExpr_stmt(Python3Parser::Expr_stmtContext *ctx) override {
         auto it = assign_cache.find(ctx);
         if(it == assign_cache.end()) {
-            std::vector<std::vector<Python3Parser::TestContext*>> value;
-            for(auto ptr : ctx->testlist()) value.push_back(ptr->test());
-            it = assign_cache.emplace(ctx,std::move(value)).first;
+            ExprInfo info;
+            for(auto ptr : ctx->testlist()) info.lists.push_back(ptr->test());
+            if(auto ptr = ctx->augassign()) info.op = operation(ptr);
+            for(int i = 0; i+1 < (int)info.lists.size(); i++) {
+                info.names.emplace_back();
+                for(auto ptr : info.lists[i]) info.names.back().push_back(symbol(node_text(ptr)));
+            }
+            it = assign_cache.emplace(ctx,std::move(info)).first;
         }
-        const auto &lists = it->second;
-
-	    if(ctx->augassign()) {
-			const std::string &s = node_text(ctx->augassign());
-			int siz = (int)(lists[0].size());
-			if(s == "+=") {
-				std::vector <std::any> ret_vec, val_vec;
-				for(int B = 0; B < siz; B++) {
-					const std::string &A = node_text(lists[0][B]);
-                    val_vec.push_back(query_value(A));
-				}
-			    std::any pre = visit(lists[1][0]);
-				if(std::any_cast <std::vector<std::any>> (&pre)) {
-					ret_vec = std::any_cast <std::vector<std::any>> (pre);
-				}
-				else {
-					ret_vec.push_back(pre);
-					for(int i = 1; i < siz; i++) {
-                        ret_vec.push_back(visit(lists[1][i]));
-			    	}
-				}
-                for(int B = 0; B < siz; B++) {
-					const auto &ret = ret_vec[B];
-			        if(std::any_cast <bool> (&ret)) {
-                        int2048 val = (int2048)(std::any_cast <bool> (ret));
-                        const std::string &A = node_text(lists[0][B]);
-                        const std::any &nw = val_vec[B];
-		    			if(std::any_cast <bool> (&nw)) {
-		    				val += (int2048)(std::any_cast <bool> (nw));
-		    				change_value(A, val);
-		      			}
-			    		else if(std::any_cast <double> (&nw)) {
-		    	   			double vv = change_double(val) + std::any_cast <double> (nw);
-			     			change_value(A, vv);
-		    			}
-			    		else {
-                            val += (std::any_cast <const int2048&> (nw));
-		    				change_value(A, val);
-		    			}
-			    	}
-					else if(std::any_cast <int2048> (&ret)) {
-                    int2048 val = (std::any_cast <const int2048&> (ret));
-						const std::string &A = node_text(lists[0][B]);
-                        const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							val += (int2048)(std::any_cast <bool> (nw));
-							change_value(A, val);
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double vv = change_double(val) + std::any_cast <double> (nw);
-							change_value(A, vv);
-						}
-						else {
-							val += (std::any_cast <const int2048&> (nw));
-							change_value(A, val);
-						}
-					}
-					else if(std::any_cast <double> (&ret)) {
-						double val = (std::any_cast <double> (ret));
-                        const std::string &A = node_text(lists[0][B]);
-                        const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							val += (double)(std::any_cast <bool> (nw));
-							change_value(A, val);
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double vv = val + std::any_cast <double> (nw);
-							change_value(A, vv);
-						}
-						else {
-							val += change_double(std::any_cast <const int2048&> (nw));
-							change_value(A, val);
-						}
-					}
-					else {
-                        const std::string &A = node_text(lists[0][B]);
-						std::string nw = std::any_cast <std::string> (val_vec[B]);
-						nw += std::any_cast <const std::string&> (ret);
-						change_value(A, nw);
-					}
-				}
-			}
-			else if(s == "-=") {
-				std::vector <std::any> ret_vec, val_vec;
-				for(int B = 0; B < siz; B++) {
-					const std::string &A = node_text(lists[0][B]);
-                    val_vec.push_back(query_value(A));
-				}
-			    std::any pre = visit(lists[1][0]);
-				if(std::any_cast <std::vector<std::any>> (&pre)) {
-					ret_vec = std::any_cast <std::vector<std::any>> (pre);
-				}
-				else {
-					ret_vec.push_back(pre);
-					for(int i = 1; i < siz; i++) {
-                        ret_vec.push_back(visit(lists[1][i]));
-			    	}
-				}
-				for(int B = 0; B < siz; B++) {
-					const auto &ret = ret_vec[B];
-				    if(std::any_cast <bool> (&ret)) {
-	                    int2048 val = (int2048)(std::any_cast <bool> (ret));
-						const std::string &A = node_text(lists[0][B]);
-	                    const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							val = - val;
-							val += (int2048)(std::any_cast <bool> (nw));
-							change_value(A, val);
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double vv = - change_double(val) + std::any_cast <double> (nw);
-							change_value(A, vv);
-						}
-						else {
-							val = - val;
-							val += (std::any_cast <const int2048&> (nw));
-							change_value(A, val);
-						}
-					}
-					else if(std::any_cast <int2048> (&ret)) {
-	                    int2048 val = (std::any_cast <const int2048&> (ret));
-						const std::string &A = node_text(lists[0][B]);
-	                    const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							val = - val;
-							val += (int2048)(std::any_cast <bool> (nw));
-							change_value(A, val);
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double vv = - change_double(val) + std::any_cast <double> (nw);
-							change_value(A, vv);
-						}
-						else {
-							val = - val;
-							val += (std::any_cast <const int2048&> (nw));
-							change_value(A, val);
-						}
-					}
-					else if(std::any_cast <double> (&ret)) {
-						double val = (std::any_cast <double> (ret));
-	                    const std::string &A = node_text(lists[0][B]);
-	                    const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							val = - val;
-							val += (double)(std::any_cast <bool> (nw));
-							change_value(A, val);
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double vv = - val + std::any_cast <double> (nw);
-							change_value(A, vv);
-						}
-						else {
-							val = - val;
-							val += change_double(std::any_cast <const int2048&> (nw));
-							change_value(A, val);
-						}
-					}
-				}
-			}
-			else if(s == "*=") {
-				std::vector <std::any> ret_vec, val_vec;
-				for(int B = 0; B < siz; B++) {
-					const std::string &A = node_text(lists[0][B]);
-                    val_vec.push_back(query_value(A));
-				}
-			    std::any pre = visit(lists[1][0]);
-				if(std::any_cast <std::vector<std::any>> (&pre)) {
-					ret_vec = std::any_cast <std::vector<std::any>> (pre);
-				}
-				else {
-					ret_vec.push_back(pre);
-					for(int i = 1; i < siz; i++) {
-                        ret_vec.push_back(visit(lists[1][i]));
-			    	}
-				}
-				for(int B = 0; B < siz; B++) {
-					const auto &ret = ret_vec[B];
-				    if(std::any_cast <bool> (&ret)) {
-	                    int2048 val = (int2048)(std::any_cast <bool> (ret));
-						const std::string &A = node_text(lists[0][B]);
-	                    const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							val *= (int2048)(std::any_cast <bool> (nw));
-							change_value(A, val);
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double vv = change_double(val) * std::any_cast <double> (nw);
-							change_value(A, vv);
-						}
-						else if(std::any_cast <int2048> (&nw)) {
-							val *= (std::any_cast <const int2048&> (nw));
-							change_value(A, val);
-						}
-						else {
-	                        std::string base = std::any_cast <const std::string&> (nw);
-							std::string ans = "";
-							if(base != "") {
-								for(int i = 1; i <= change_ll(val); i++) ans += base;
-							}
-							change_value(A, ans);
-						}
-					}
-					else if(std::any_cast <int2048> (&ret)) {
-	                    int2048 val = (std::any_cast <const int2048&> (ret));
-						const std::string &A = node_text(lists[0][B]);
-	                    const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							val *= (int2048)(std::any_cast <bool> (nw));
-							change_value(A, val);
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double vv = change_double(val) * std::any_cast <double> (nw);
-							change_value(A, vv);
-						}
-						else if(std::any_cast <int2048> (&nw)) {
-							val *= (std::any_cast <const int2048&> (nw));
-							change_value(A, val);
-						}
-						else {
-							std::string base = std::any_cast <const std::string&> (nw);
-							std::string ans = "";
-							if(base != "") {
-								for(int i = 1; i <= change_ll(val); i++) ans += base;
-							}
-							change_value(A, ans);
-						}
-					}
-					else if(std::any_cast <double> (&ret)) {
-						double val = (std::any_cast <double> (ret));
-	                    const std::string &A = node_text(lists[0][B]);
-	                    const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							val *= (double)(std::any_cast <bool> (nw));
-							change_value(A, val);
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double vv = val * std::any_cast <double> (nw);
-							change_value(A, vv);
-						}
-						else {
-							val *= change_double(std::any_cast <const int2048&> (nw));
-							change_value(A, val);
-						}
-					}
-					else {
-	                    const std::string &A = node_text(lists[0][B]);
-						const std::any &nw = val_vec[B];
-	                    int2048 val;
-						if(std::any_cast <bool> (&nw)) val = (int2048)(std::any_cast <bool> (nw));
-						else val = std::any_cast <const int2048&> (nw);
-						std::string base = std::any_cast <const std::string&> (ret);
-						std::string ans = "";
-						if(base != "") {
-							for(int i = 1; i <= change_ll(val); i++) ans += base;
-						}
-						change_value(A, ans);
-					}
-				}
-			}
-			else if(s == "/=") {
-				std::vector <std::any> ret_vec, val_vec;
-				for(int B = 0; B < siz; B++) {
-					const std::string &A = node_text(lists[0][B]);
-                    val_vec.push_back(query_value(A));
-				}
-			    std::any pre = visit(lists[1][0]);
-				if(std::any_cast <std::vector<std::any>> (&pre)) {
-					ret_vec = std::any_cast <std::vector<std::any>> (pre);
-				}
-				else {
-					ret_vec.push_back(pre);
-					for(int i = 1; i < siz; i++) {
-                        ret_vec.push_back(visit(lists[1][i]));
-			    	}
-				}
-				for(int B = 0; B < siz; B++) {
-					const auto &ret = ret_vec[B];
-				    if(std::any_cast <bool> (&ret)) {
-	                    int2048 val = (int2048)(std::any_cast <bool> (ret));
-						const std::string &A = node_text(lists[0][B]);
-	                    const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							auto other = (int2048)(std::any_cast <bool> (nw));
-							change_value(A, change_double(other) / change_double(val));
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double vv = std::any_cast <double> (nw) / change_double(val);
-							change_value(A, vv);
-						}
-						else {
-							auto other = (std::any_cast <const int2048&> (nw));
-							change_value(A, change_double(other) / change_double(val));
-						}
-					}
-					else if(std::any_cast <int2048> (&ret)) {
-	                    int2048 val = (std::any_cast <const int2048&> (ret));
-						const std::string &A = node_text(lists[0][B]);
-	                    const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							auto other = (int2048)(std::any_cast <bool> (nw));
-							change_value(A, change_double(other) / change_double(val));
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double vv = std::any_cast <double> (nw) / change_double(val);
-							change_value(A, vv);
-						}
-						else {
-							auto other = (std::any_cast <const int2048&> (nw));
-							change_value(A, change_double(other) / change_double(val));
-						}
-					}
-					else if(std::any_cast <double> (&ret)) {
-						double val = (std::any_cast <double> (ret));
-	                    const std::string &A = node_text(lists[0][B]);
-	                    const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							double other = (double)(std::any_cast <bool> (nw));
-							change_value(A, other / val);
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double vv = std::any_cast <double> (nw) / val;
-							change_value(A, vv);
-						}
-						else {
-							double other = change_double(std::any_cast <const int2048&> (nw));
-							change_value(A, other / val);
-						}
-					}
-				}
-			}
-			else if(s == "//=") {
-				std::vector <std::any> ret_vec, val_vec;
-				for(int B = 0; B < siz; B++) {
-					const std::string &A = node_text(lists[0][B]);
-                    val_vec.push_back(query_value(A));
-				}
-			    std::any pre = visit(lists[1][0]);
-				if(std::any_cast <std::vector<std::any>> (&pre)) {
-					ret_vec = std::any_cast <std::vector<std::any>> (pre);
-				}
-				else {
-					ret_vec.push_back(pre);
-					for(int i = 1; i < siz; i++) {
-                        ret_vec.push_back(visit(lists[1][i]));
-			    	}
-				}
-				for(int B = 0; B < siz; B++) {
-					const auto &ret = ret_vec[B];
-				    if(std::any_cast <bool> (&ret)) {
-	                    int2048 val = (int2048)(std::any_cast <bool> (ret));
-						const std::string &A = node_text(lists[0][B]);
-	                    const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							auto other = (int2048)(std::any_cast <bool> (nw));
-							change_value(A, other / val);
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double vv = std::any_cast <double> (nw) / change_double(val);
-							change_value(A, floor(vv));
-						}
-						else {
-							auto other = (std::any_cast <const int2048&> (nw));
-						    change_value(A, other / val);
-						}
-					}
-					else if(std::any_cast <int2048> (&ret)) {
-	                    int2048 val = (std::any_cast <const int2048&> (ret));
-						const std::string &A = node_text(lists[0][B]);
-	                    const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							auto other = (int2048)(std::any_cast <bool> (nw));
-							change_value(A, other / val);
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double vv = std::any_cast <double> (nw) / change_double(val);
-							change_value(A, floor(vv));
-						}
-						else {
-							auto other = (std::any_cast <const int2048&> (nw));
-							change_value(A, other / val);
-						}
-					}
-					else if(std::any_cast <double> (&ret)) {
-						double val = (std::any_cast <double> (ret));
-	                    const std::string &A = node_text(lists[0][B]);
-	                    const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							double other = (double)(std::any_cast <bool> (nw));
-							change_value(A, floor(other / val));
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double vv = std::any_cast <double> (nw) / val;
-							change_value(A, floor(vv));
-						}
-						else {
-							double other = change_double(std::any_cast <const int2048&> (nw));
-							change_value(A, floor(other / val));
-						}
-					}
-				}
-			}
-			else {
-				std::vector <std::any> ret_vec, val_vec;
-				for(int B = 0; B < siz; B++) {
-					const std::string &A = node_text(lists[0][B]);
-                    val_vec.push_back(query_value(A));
-				}
-			    std::any pre = visit(lists[1][0]);
-				if(std::any_cast <std::vector<std::any>> (&pre)) {
-					ret_vec = std::any_cast <std::vector<std::any>> (pre);
-				}
-				else {
-					ret_vec.push_back(pre);
-					for(int i = 1; i < siz; i++) {
-                        ret_vec.push_back(visit(lists[1][i]));
-			    	}
-				}
-				for(int B = 0; B < siz; B++) {
-					const auto &ret = ret_vec[B];
-				    if(std::any_cast <bool> (&ret)) {
-	                    int2048 val = (int2048)(std::any_cast <bool> (ret));
-						const std::string &A = node_text(lists[0][B]);
-	                    const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							auto other = (int2048)(std::any_cast <bool> (nw));
-							change_value(A, other % val);
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double other = std::any_cast <double> (nw), k = change_double(val);
-							double vv = other / k;
-							change_value(A, other - floor(vv) * k);
-						}
-						else {
-							auto other = (std::any_cast <const int2048&> (nw));
-							change_value(A, other % val);
-						}
-					}
-					else if(std::any_cast <int2048> (&ret)) {
-	                    int2048 val = (std::any_cast <const int2048&> (ret));
-						const std::string &A = node_text(lists[0][B]);
-	                    const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							auto other = (int2048)(std::any_cast <bool> (nw));
-							change_value(A, other % val);
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double other = std::any_cast <double> (nw), k = change_double(val);
-							double vv = other / k;
-							change_value(A, other - floor(vv) * k);
-						}
-						else {
-							auto other = (std::any_cast <const int2048&> (nw));
-							change_value(A, other % val);
-						}
-					}
-					else if(std::any_cast <double> (&ret)) {
-						double val = (std::any_cast <double> (ret));
-	                    const std::string &A = node_text(lists[0][B]);
-	                    const std::any &nw = val_vec[B];
-						if(std::any_cast <bool> (&nw)) {
-							double other = (double)(std::any_cast <bool> (nw));
-							change_value(A, other - val * floor(other / val));
-						}
-						else if(std::any_cast <double> (&nw)) {
-							double other = std::any_cast <double> (nw), k = val;
-							double vv = other / k;
-							change_value(A, other - k * floor(vv));
-						}
-						else {
-							double other = change_double(std::any_cast <const int2048&> (nw));
-							change_value(A, other - val * floor(other / val));
-						}
-					}
-				}
-			}
-		    return nullptr;
-		}
-		int len = (lists).size(), siz = (lists[0]).size();
-		std::vector <std::any> ret_vec{};
-		std::any pre = visit(lists[len-1][0]);
-		if(std::any_cast <std::vector<std::any>> (&pre)) {
-			ret_vec = std::any_cast <std::vector<std::any>> (pre);
-		}
-		else {
-			ret_vec.push_back(pre);
-			for(int i = 1; i < siz; i++) {
-				ret_vec.push_back(visit(lists[len-1][i]));
-			}
-		}
-		for(int i = 0; i <= len - 2; i++) {
-            for(int j = 0; j < siz; j++) {
-				const std::string &A = node_text(lists[i][j]);
-				change_value(A, ret_vec[j]);
-			}
-		}
-		return nullptr;
-	}
+        const auto &info = it->second;
+        const auto &lists = info.lists;
+        if(lists.size() == 1) {
+            visit(lists[0][0]);
+            return nullptr;
+        }
+        if(info.names[0].size() == 1 && lists.back().size() == 1) {
+            std::any left;
+            if(info.op) left = query_value(info.names[0][0]);
+            auto right = visit(lists.back()[0]);
+            if(auto ptr = std::any_cast<std::vector<std::any>>(&right)) {
+                auto value = std::move(ptr->at(0));
+                right = std::move(value);
+            }
+            if(info.op) change_value(info.names[0][0],binary_value(std::move(left),right,info.op));
+            else {
+                for(const auto &names : info.names) change_value(names[0],right);
+            }
+            return nullptr;
+        }
+        std::vector<std::any> left,right;
+        if(info.op) {
+            left.reserve(info.names[0].size());
+            for(int name : info.names[0]) left.push_back(query_value(name));
+        }
+        auto first = visit(lists.back()[0]);
+        if(auto ptr = std::any_cast<std::vector<std::any>>(&first)) right = std::move(*ptr);
+        else {
+            right.reserve(lists.back().size());
+            right.push_back(std::move(first));
+            for(int i = 1; i < (int)lists.back().size(); i++) right.push_back(visit(lists.back()[i]));
+        }
+        if(info.op) {
+            for(int i = 0; i < (int)left.size(); i++) change_value(info.names[0][i],binary_value(std::move(left[i]),right[i],info.op));
+        }
+        else {
+            for(const auto &names : info.names) {
+                for(int i = 0; i < (int)names.size(); i++) change_value(names[i],right[i]);
+            }
+        }
+        return nullptr;
+    }
     std::any visitComparison(Python3Parser::ComparisonContext *ctx) override {
 		auto it = compare_cache.find(ctx);
 		if(it == compare_cache.end()) it = compare_cache.emplace(ctx,std::make_pair(ctx->arith_expr(),ctx->comp_op())).first;
@@ -1338,33 +929,30 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 		const auto &stmts = it->second;
 		for(auto stmt : stmts) {
 			visit(stmt);
-			if(returning) break;
+			if(returning || jumping) break;
 		}
 		return nullptr;
 	}
 	std::any visitWhile_stmt(Python3Parser::While_stmtContext *ctx) override {
-        while(toBool(visit(ctx->test()))) {
-            try {
-				visit(ctx->suite());
-				if(returning) break;
-			}
-			catch(const BreakSignal &) {
-				break;
-			}
-			catch(const ContinueSignal &) {
-				continue;
-			}
+		auto test = ctx->test();
+		auto suite = ctx->suite();
+		while(toBool(visit(test))) {
+			visit(suite);
+			if(returning) break;
+			int ret = jumping;
+			jumping = 0;
+			if(ret == 1) break;
 		}
 		return nullptr;
-    }
+	}
 	std::any visitBreak_stmt(Python3Parser::Break_stmtContext *ctx) override {
-		throw BreakSignal{};
-        return nullptr;
-    }
-    std::any visitContinue_stmt(Python3Parser::Continue_stmtContext *ctx) override {
-        throw ContinueSignal{};
+		jumping = 1;
 		return nullptr;
-    }
+	}
+	std::any visitContinue_stmt(Python3Parser::Continue_stmtContext *ctx) override {
+		jumping = 2;
+		return nullptr;
+	}
 	std::any visitTestlist(Python3Parser::TestlistContext *ctx) override {
 		std::vector <std::any> ret{};
 		int siz = (ctx->test()).size();
