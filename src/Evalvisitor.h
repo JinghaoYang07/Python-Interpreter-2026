@@ -11,6 +11,7 @@
 #include <cmath>
 #include <sstream>
 #include <iomanip>
+#include <utility>
 
 using int2048 = sjtu::int2048;
 
@@ -46,9 +47,8 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 	std::vector <std::string> stk;
 	struct BreakSignal {};
 	struct ContinueSignal {};
-	struct ReturnSignal {
-		std::any ret;
-	};
+	bool returning = false;
+	std::any return_value = nullptr;
 	bool isNone(const std::any &x) {
 		return std::any_cast <std::nullptr_t> (&x) != nullptr;
 	}
@@ -389,13 +389,10 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 				}
 			}
 			stk.push_back(real_name);
-			std::any ans = nullptr;
-			try {
-                visit(ptr);
-			}
-			catch(const ReturnSignal &ret)  {
-                ans = ret.ret;
-			}
+			visit(ptr);
+			std::any ans = returning ? std::move(return_value) : std::any(nullptr);
+			returning = false;
+			return_value = nullptr;
 			tmp_mp.erase(real_name);
 			stk.pop_back();
 			return ans;
@@ -1288,10 +1285,21 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 		visit(ctx->suite(siz));
 		return nullptr;
     }
+	std::any visitSuite(Python3Parser::SuiteContext *ctx) override {
+		if(ctx->simple_stmt()) {
+			return visit(ctx->simple_stmt());
+		}
+		for(auto stmt : ctx->stmt()) {
+			visit(stmt);
+			if(returning) break;
+		}
+		return nullptr;
+	}
 	std::any visitWhile_stmt(Python3Parser::While_stmtContext *ctx) override {
         while(toBool(visit(ctx->test()))) {
             try {
 				visit(ctx->suite());
+				if(returning) break;
 			}
 			catch(const BreakSignal &) {
 				break;
@@ -1319,15 +1327,20 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 		return ret;
 	}
     std::any visitReturn_stmt(Python3Parser::Return_stmtContext *ctx) override {
-		if(ctx->testlist() == nullptr) {
-			throw ReturnSignal{nullptr};
-		} 
-        if((ctx->testlist()->test()).size() == 1) {
-			throw ReturnSignal{visit(ctx->testlist()->test(0))};
-		} 
-		throw ReturnSignal{visit(ctx->testlist())};
+		std::any value = nullptr;
+		if(ctx->testlist()) {
+			if(ctx->testlist()->test().size() == 1) {
+				value = visit(ctx->testlist()->test(0));
+			}
+			else {
+				value = visit(ctx->testlist());
+			}
+		}
+		return_value = std::move(value);
+		returning = true;
 		return nullptr;
     }
+
 	std::any visitFormat_string(Python3Parser::Format_stringContext *ctx) override {
 		std::string ret = "";
         for(auto child : ctx->children) {
