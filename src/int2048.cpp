@@ -20,14 +20,13 @@ namespace sjtu {
     }
     const double PI=3.1415926535897932384626433832795028841971;
 	  for(int i=0;i<up;i++) if(i<pr[i]) swap(A[i],A[pr[i]]);
-	  for(int mid=1;mid<up;mid<<=1) {
-		  std::complex <double> wn=std::complex <double>(cos(PI/mid),type*sin(PI/mid));
-      int level=0;
-      for(int k=mid;k>1;k>>=1) level++;
+    int level=0;
+	  for(int mid=1;mid<up;mid<<=1,level++) {
       auto &cache=roots[type==1?0:1];
       if((int)cache.size()<=level) cache.resize(level+1);
       auto &rts=cache[level];
       if(rts.empty()) {
+        std::complex <double> wn(cos(PI/mid),type*sin(PI/mid));
         rts.resize(mid);
         std::complex <double> w(1,0);
         for(int k=0;k<mid;k++,w=w*wn) {
@@ -55,7 +54,7 @@ namespace sjtu {
     flg=1;
     digits={};
   }
-  int2048::int2048(long long x) {
+  void int2048::assign_ll(long long x) {
     digits.clear(); 
     if(x>=0) flg=1;
     else flg=-1;
@@ -65,8 +64,12 @@ namespace sjtu {
     } 
     standardize();
   }
+  int2048::int2048(long long x) {
+    assign_ll(x);
+  }
   int2048::int2048(const std::string &s) {
     digits.clear();
+    digits.reserve((s.size()+3)/4);
     if(s[0]=='-') {
       flg=-1;
       for(int i=(int)(s.size())-1;i>=1;i-=LENB) {
@@ -98,6 +101,7 @@ namespace sjtu {
   // 读入一个大整数
   void int2048::read(const std::string &s) {
     digits.clear();
+    digits.reserve((s.size()+3)/4);
     if(s[0]=='-') {
       flg=-1;
       for(int i=(int)(s.size())-1;i>=1;i-=LENB) {
@@ -141,20 +145,25 @@ namespace sjtu {
   // 加上一个大整数
   int2048 &int2048::add(const int2048 &Extra) {
     if(digits.size()<=4&&Extra.digits.size()<=4) {
-      *this=int2048(change_ll(*this)+change_ll(Extra));
+      assign_ll(change_ll(*this)+change_ll(Extra));
       return *this;
     }
-    int2048 extra=Extra;
+    if(&Extra==this) {
+      int2048 cp=Extra;
+      return add(cp);
+    }
+    const int2048 &extra=Extra;
     if(flg==extra.flg) {
       int len=std::max(extra.digits.size(),digits.size());
-      while(digits.size()<=len) digits.push_back(0);
+      digits.resize(len+1,0);
       for(int i=0;i<len;i++) {
         int nw=-1;
         if(i<(int)(extra.digits.size())) nw=extra.digits[i];
         else nw=0;
         digits[i]+=nw;
-        if(digits[i]>=BASE) digits[i+1]+=digits[i]/BASE;
-        digits[i]%=BASE;
+        if(digits[i]>=BASE) {
+          digits[i]-=BASE; digits[i+1]++;
+        }
       }
       standardize();
     }
@@ -170,7 +179,7 @@ namespace sjtu {
       }
       int2048 EX;
       if(tp==0) {
-        EX.flg=flg,EX.digits=digits;
+        EX.flg=flg,EX.digits=std::move(digits);
         flg=extra.flg,digits=extra.digits;
       }
       else EX=extra;
@@ -200,6 +209,10 @@ namespace sjtu {
   }
   // 减去一个大整数
   int2048 &int2048::minus(const int2048 &extra) {
+    if(digits.size()<=4&&extra.digits.size()<=4) {
+      assign_ll(change_ll(*this)-change_ll(extra));
+      return *this;
+    }
     int2048 c=extra; c.flg*=(-1);
     return add(c);
   }
@@ -209,8 +222,8 @@ namespace sjtu {
     return a;
   }
   int2048 &int2048::naive_mul(const int2048& Extra) {
-    int2048 extra=Extra;
-    flg=flg*extra.flg;
+    const int2048 &extra=Extra;
+    int tp=flg*extra.flg;
     int len=digits.size()+extra.digits.size()+1;
     std::vector <long long> ans(len,0);
     for(int i=(int)(digits.size())-1;i>=0;i--) {
@@ -220,7 +233,7 @@ namespace sjtu {
         ans[i+j]+=digits[i]*extra.digits[j];
       }
     }
-    digits=std::move(ans);
+    flg=tp; digits=std::move(ans);
     for(int i=0;i<(int)(digits.size())-1;i++) {
       digits[i+1]+=digits[i]/BASE;
       digits[i]%=BASE;
@@ -234,6 +247,17 @@ namespace sjtu {
     return a;
   }
   int2048 &int2048::mul(const int2048& Extra) {
+    if(digits.size()<=4&&Extra.digits.size()<=4) {
+      long long x=change_ll(*this),y=change_ll(Extra);
+      flg=(x<0)^(y<0)?-1:1;
+      if(x<0) x=-x;
+      if(y<0) y=-y;
+      unsigned __int128 val=(unsigned __int128)x*y;
+      digits.clear();
+      while(val) { digits.push_back(val%BASE); val/=BASE; }
+      standardize();
+      return *this;
+    }
     if(digits.empty()||Extra.digits.empty()) {
       digits.clear(); flg=1;
       return *this;
@@ -249,7 +273,7 @@ namespace sjtu {
       standardize();
       return *this;
     }
-    standardize(); int2048 cp=Extra; cp.standardize();
+    standardize(); const int2048 &cp=Extra;
     if(std::min(digits.size(),cp.digits.size())<=200) {
       return naive_mul(Extra);
     }
@@ -257,19 +281,16 @@ namespace sjtu {
       digits.clear();
       flg=1; return (*this);
     }
-    std::vector <std::complex<double>> a{},b{};
-    for(auto nw:digits) a.push_back({double(nw),0});
-    for(auto nw:cp.digits) b.push_back({double(nw),0});
-    int n=a.size()-1,m=b.size()-1,up=1;
+    int n=digits.size()-1,m=cp.digits.size()-1,up=1;
     while(up<=n+m) up<<=1;
-    while(a.size()<up) a.push_back({0,0});
-    while(b.size()<up) b.push_back({0,0});
+    std::vector <std::complex<double>> a(up),b(up);
+    for(int i=0;i<=n;i++) a[i]={double(digits[i]),0};
+    for(int i=0;i<=m;i++) b[i]={double(cp.digits[i]),0};
     fft(a,1),fft(b,1);
     for(int i=0;i<up;i++) a[i]*=b[i];
     fft(a,-1);
-    std::vector <long long> vec;
-    for(int i=0;i<up;i++) vec.push_back((long long)(a[i].real()/up+0.5));
-    for(int i=1;i<=7;i++) vec.push_back(0);
+    std::vector <long long> vec(up+7,0);
+    for(int i=0;i<up;i++) vec[i]=(long long)(a[i].real()/up+0.5);
     for(int i=0;i<(int)(vec.size())-1;i++) {
       vec[i+1]+=vec[i]/BASE;
       vec[i]%=BASE;
@@ -426,7 +447,7 @@ namespace sjtu {
     }
     int fac=BASE/(b.digits.back()+1),flg=false;
     if(fac>1) {
-      a.naive_mul(fac),b.naive_mul(fac);
+      a.mul(fac),b.mul(fac);
     }
     a.standardize(),b.standardize();
     if(b.digits.size()&1) {
@@ -434,13 +455,15 @@ namespace sjtu {
       a.digits.insert(a.digits.begin(),0),b.digits.insert(b.digits.begin(),0);
     }
     int len=b.digits.size()/2;
-    std::vector <long long> give{},ret{};
+    std::vector <long long> give{},ret{},rev_give;
+    give.reserve(len*3); ret.reserve(a.digits.size()+len); rev_give.reserve(len*3);
+    int2048 bb(0);
+    bb.digits.assign(b.digits.begin()+len,b.digits.end());
     for(int i=((int)a.digits.size()-1)/len*len;i>=0;i-=len) {
       for(int j=std::min(i+len-1,(int)(a.digits.size())-1);j>=i;j--) {
       give.push_back(a.digits[j]);
       }
-      std::vector <long long> rev_give;
-      for(int j=(int)(give.size())-1;j>=0;j--) rev_give.push_back(give[j]);
+      rev_give.assign(give.rbegin(),give.rend());
       if(!geq(rev_give,b.digits)) {
         for(int j=1;j<=len;j++) ret.push_back(0);
         continue;
@@ -454,11 +477,10 @@ namespace sjtu {
         for(int j=(int)(ex.digits.size())-1;j>=0;j--) give.push_back(ex.digits[j]);
         continue;
       }
-      int2048 aa(0),bb(0); 
-      for(int j=len;j<=std::min((int)rev_give.size(),3*len)-1;j++) aa.digits.push_back(rev_give[j]);
-      for(int j=len;j<=2*len-1;j++) bb.digits.push_back(b.digits[j]);
-      auto vec=REALDIV(aa,bb);
-      int2048 val=vec[0]; 
+      int2048 aa(0);
+      aa.digits.assign(rev_give.begin()+len,rev_give.begin()+std::min((int)rev_give.size(),3*len));
+      auto vec=REALDIV(std::move(aa),bb);
+      int2048 val=std::move(vec[0]);
       int2048 cp=val; cp.mul(b);
       while(geq(rev_give,cp.digits)) {
         cp.add(b); val.add(int2048(1));
@@ -470,7 +492,7 @@ namespace sjtu {
       val.standardize();
       for(int j=1;j<=len-(int)(val.digits.size());j++) ret.push_back(0);
       for(int j=(int)(val.digits.size())-1;j>=0;j--) ret.push_back(val.digits[j]);
-      aa.digits=rev_give; aa.minus(cp);
+      aa.digits=std::move(rev_give); aa.minus(cp);
       aa.standardize(); give.clear();
       for(int j=(int)(aa.digits.size())-1;j>=0;j--) give.push_back(aa.digits[j]);
     }
@@ -492,14 +514,21 @@ namespace sjtu {
       }
     }
     res.standardize();
-    RET.push_back(val),RET.push_back(res);
+    RET.reserve(2);
+    RET.push_back(std::move(val)),RET.push_back(std::move(res));
     return RET;
   }
 
   int2048& int2048::div(const int2048& Extra) {
-    int tp=(flg==Extra.flg?1:-1); int2048 extra=Extra;
-    flg=extra.flg=1;
-    auto vec=REALDIV((*this),extra);
+    if(digits.size()<=4&&Extra.digits.size()<=4) {
+      long long x=change_ll(*this),y=change_ll(Extra);
+      long long q=x/y;
+      if(x%y&&((x<0)!=(y<0))) q--;
+      assign_ll(q);
+      return *this;
+    }
+    int tp=(flg==Extra.flg?1:-1);
+    auto vec=REALDIV(*this,Extra);
     (*this)=std::move(vec[0]); flg=tp;
     if(tp==-1&&vec[1].digits.size()) minus(1);
     standardize();
@@ -566,7 +595,7 @@ namespace sjtu {
       for(int i=(int)digits.size()-1;i>=0;i--) rem=(rem*BASE+digits[i])%y;
       long long r=(long long)rem;
       if(tp!=bp&&r) r=y-r;
-      *this=int2048(r*bp);
+      assign_ll(r*bp);
       return *this;
     }
     auto vec=REALDIV(*this,extra);
@@ -589,28 +618,7 @@ namespace sjtu {
     return in;
   }
   std::ostream &operator<<(std::ostream &out, const int2048 &s) {
-    if(s.digits.size()==0) {
-      out<<0;
-      return out;
-    }
-    if(s.flg==-1) {
-      out<<'-';
-    }
-    bool flg=false,fst=true;
-    for(int i=(int)(s.digits.size())-1;i>=0;i--) {
-      if(s.digits[i]) flg=true;
-      if(flg) {
-        int NW=BASE/10,x=s.digits[i];
-        for(int j=LENB;j>=1;j--) {
-          if(fst) break;
-          if(x<NW) out<<0;
-          NW/=10;
-        }
-        fst=false;
-        if(x) out<<x;
-      }
-    }
-    return out;
+    return out<<change_string(s);
   }
 
   int int2048::compare(const int2048 &y) const {

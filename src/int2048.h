@@ -21,6 +21,7 @@
 namespace sjtu {
 class int2048 {
 private:
+  void assign_ll(long long x);
   int flg;
   std::vector <long long> digits;
   static void fft(std::vector <std::complex<double>> &a,int type);
@@ -128,6 +129,7 @@ public:
       return "0";
     }
     std::string ret="";
+    ret.reserve(A.digits.size()*4+1);
     if(A.flg != 1) {
       ret += "-";
     }

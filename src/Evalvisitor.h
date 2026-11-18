@@ -17,6 +17,9 @@
 using int2048 = sjtu::int2048;
 
 class EvalVisitor : public Python3ParserBaseVisitor {
+    std::unordered_map<Python3Parser::Expr_stmtContext*,std::vector<std::vector<Python3Parser::TestContext*>>> assign_cache;
+    std::unordered_map<Python3Parser::And_testContext*,std::vector<Python3Parser::Not_testContext*>> and_cache;
+    std::unordered_map<Python3Parser::Or_testContext*,std::vector<Python3Parser::And_testContext*>> or_cache;
 	// TODO: override all methods of Python3ParserBaseVisitor
 	std::map <std::string, std::any> mp;
 	struct FCT {
@@ -655,30 +658,38 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 		return ret_ll;
 	}
 	std::any visitExpr_stmt(Python3Parser::Expr_stmtContext *ctx) override {
+        auto it = assign_cache.find(ctx);
+        if(it == assign_cache.end()) {
+            std::vector<std::vector<Python3Parser::TestContext*>> value;
+            for(auto ptr : ctx->testlist()) value.push_back(ptr->test());
+            it = assign_cache.emplace(ctx,std::move(value)).first;
+        }
+        const auto &lists = it->second;
+
 	    if(ctx->augassign()) {
 			const std::string &s = node_text(ctx->augassign());
-			int siz = (int)(ctx->testlist(0)->test().size());
+			int siz = (int)(lists[0].size());
 			if(s == "+=") {
 				std::vector <std::any> ret_vec, val_vec;
 				for(int B = 0; B < siz; B++) {
-					const std::string &A = node_text(ctx->testlist(0)->test(B));
+					const std::string &A = node_text(lists[0][B]);
                     val_vec.push_back(query_value(A));
 				}
-			    std::any pre = visit(ctx->testlist(1)->test(0));
+			    std::any pre = visit(lists[1][0]);
 				if(std::any_cast <std::vector<std::any>> (&pre)) {
 					ret_vec = std::any_cast <std::vector<std::any>> (pre);
 				}
 				else {
 					ret_vec.push_back(pre);
 					for(int i = 1; i < siz; i++) {
-			    		ret_vec.push_back(visit(ctx->testlist(1)->test(i)));
+                        ret_vec.push_back(visit(lists[1][i]));
 			    	}
 				}
                 for(int B = 0; B < siz; B++) {
 					const auto &ret = ret_vec[B];
 			        if(std::any_cast <bool> (&ret)) {
                         int2048 val = (int2048)(std::any_cast <bool> (ret));
-                        const std::string &A = node_text(ctx->testlist(0)->test(B));
+                        const std::string &A = node_text(lists[0][B]);
                         const std::any &nw = val_vec[B];
 		    			if(std::any_cast <bool> (&nw)) {
 		    				val += (int2048)(std::any_cast <bool> (nw));
@@ -695,7 +706,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 			    	}
 					else if(std::any_cast <int2048> (&ret)) {
                     int2048 val = (std::any_cast <const int2048&> (ret));
-						const std::string &A = node_text(ctx->testlist(0)->test(B));
+						const std::string &A = node_text(lists[0][B]);
                         const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							val += (int2048)(std::any_cast <bool> (nw));
@@ -712,7 +723,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					}
 					else if(std::any_cast <double> (&ret)) {
 						double val = (std::any_cast <double> (ret));
-                        const std::string &A = node_text(ctx->testlist(0)->test(B));
+                        const std::string &A = node_text(lists[0][B]);
                         const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							val += (double)(std::any_cast <bool> (nw));
@@ -728,7 +739,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 						}
 					}
 					else {
-                        const std::string &A = node_text(ctx->testlist(0)->test(B));
+                        const std::string &A = node_text(lists[0][B]);
 						std::string nw = std::any_cast <std::string> (val_vec[B]);
 						nw += std::any_cast <const std::string&> (ret);
 						change_value(A, nw);
@@ -738,24 +749,24 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 			else if(s == "-=") {
 				std::vector <std::any> ret_vec, val_vec;
 				for(int B = 0; B < siz; B++) {
-					const std::string &A = node_text(ctx->testlist(0)->test(B));
+					const std::string &A = node_text(lists[0][B]);
                     val_vec.push_back(query_value(A));
 				}
-			    std::any pre = visit(ctx->testlist(1)->test(0));
+			    std::any pre = visit(lists[1][0]);
 				if(std::any_cast <std::vector<std::any>> (&pre)) {
 					ret_vec = std::any_cast <std::vector<std::any>> (pre);
 				}
 				else {
 					ret_vec.push_back(pre);
 					for(int i = 1; i < siz; i++) {
-			    		ret_vec.push_back(visit(ctx->testlist(1)->test(i)));
+                        ret_vec.push_back(visit(lists[1][i]));
 			    	}
 				}
 				for(int B = 0; B < siz; B++) {
 					const auto &ret = ret_vec[B];
 				    if(std::any_cast <bool> (&ret)) {
 	                    int2048 val = (int2048)(std::any_cast <bool> (ret));
-						const std::string &A = node_text(ctx->testlist(0)->test(B));
+						const std::string &A = node_text(lists[0][B]);
 	                    const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							val = - val;
@@ -774,7 +785,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					}
 					else if(std::any_cast <int2048> (&ret)) {
 	                    int2048 val = (std::any_cast <const int2048&> (ret));
-						const std::string &A = node_text(ctx->testlist(0)->test(B));
+						const std::string &A = node_text(lists[0][B]);
 	                    const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							val = - val;
@@ -793,7 +804,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					}
 					else if(std::any_cast <double> (&ret)) {
 						double val = (std::any_cast <double> (ret));
-	                    const std::string &A = node_text(ctx->testlist(0)->test(B));
+	                    const std::string &A = node_text(lists[0][B]);
 	                    const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							val = - val;
@@ -815,24 +826,24 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 			else if(s == "*=") {
 				std::vector <std::any> ret_vec, val_vec;
 				for(int B = 0; B < siz; B++) {
-					const std::string &A = node_text(ctx->testlist(0)->test(B));
+					const std::string &A = node_text(lists[0][B]);
                     val_vec.push_back(query_value(A));
 				}
-			    std::any pre = visit(ctx->testlist(1)->test(0));
+			    std::any pre = visit(lists[1][0]);
 				if(std::any_cast <std::vector<std::any>> (&pre)) {
 					ret_vec = std::any_cast <std::vector<std::any>> (pre);
 				}
 				else {
 					ret_vec.push_back(pre);
 					for(int i = 1; i < siz; i++) {
-			    		ret_vec.push_back(visit(ctx->testlist(1)->test(i)));
+                        ret_vec.push_back(visit(lists[1][i]));
 			    	}
 				}
 				for(int B = 0; B < siz; B++) {
 					const auto &ret = ret_vec[B];
 				    if(std::any_cast <bool> (&ret)) {
 	                    int2048 val = (int2048)(std::any_cast <bool> (ret));
-						const std::string &A = node_text(ctx->testlist(0)->test(B));
+						const std::string &A = node_text(lists[0][B]);
 	                    const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							val *= (int2048)(std::any_cast <bool> (nw));
@@ -857,7 +868,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					}
 					else if(std::any_cast <int2048> (&ret)) {
 	                    int2048 val = (std::any_cast <const int2048&> (ret));
-						const std::string &A = node_text(ctx->testlist(0)->test(B));
+						const std::string &A = node_text(lists[0][B]);
 	                    const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							val *= (int2048)(std::any_cast <bool> (nw));
@@ -882,7 +893,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					}
 					else if(std::any_cast <double> (&ret)) {
 						double val = (std::any_cast <double> (ret));
-	                    const std::string &A = node_text(ctx->testlist(0)->test(B));
+	                    const std::string &A = node_text(lists[0][B]);
 	                    const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							val *= (double)(std::any_cast <bool> (nw));
@@ -898,7 +909,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 						}
 					}
 					else {
-	                    const std::string &A = node_text(ctx->testlist(0)->test(B));
+	                    const std::string &A = node_text(lists[0][B]);
 						const std::any &nw = val_vec[B];
 	                    int2048 val;
 						if(std::any_cast <bool> (&nw)) val = (int2048)(std::any_cast <bool> (nw));
@@ -915,24 +926,24 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 			else if(s == "/=") {
 				std::vector <std::any> ret_vec, val_vec;
 				for(int B = 0; B < siz; B++) {
-					const std::string &A = node_text(ctx->testlist(0)->test(B));
+					const std::string &A = node_text(lists[0][B]);
                     val_vec.push_back(query_value(A));
 				}
-			    std::any pre = visit(ctx->testlist(1)->test(0));
+			    std::any pre = visit(lists[1][0]);
 				if(std::any_cast <std::vector<std::any>> (&pre)) {
 					ret_vec = std::any_cast <std::vector<std::any>> (pre);
 				}
 				else {
 					ret_vec.push_back(pre);
 					for(int i = 1; i < siz; i++) {
-			    		ret_vec.push_back(visit(ctx->testlist(1)->test(i)));
+                        ret_vec.push_back(visit(lists[1][i]));
 			    	}
 				}
 				for(int B = 0; B < siz; B++) {
 					const auto &ret = ret_vec[B];
 				    if(std::any_cast <bool> (&ret)) {
 	                    int2048 val = (int2048)(std::any_cast <bool> (ret));
-						const std::string &A = node_text(ctx->testlist(0)->test(B));
+						const std::string &A = node_text(lists[0][B]);
 	                    const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							auto other = (int2048)(std::any_cast <bool> (nw));
@@ -949,7 +960,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					}
 					else if(std::any_cast <int2048> (&ret)) {
 	                    int2048 val = (std::any_cast <const int2048&> (ret));
-						const std::string &A = node_text(ctx->testlist(0)->test(B));
+						const std::string &A = node_text(lists[0][B]);
 	                    const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							auto other = (int2048)(std::any_cast <bool> (nw));
@@ -966,7 +977,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					}
 					else if(std::any_cast <double> (&ret)) {
 						double val = (std::any_cast <double> (ret));
-	                    const std::string &A = node_text(ctx->testlist(0)->test(B));
+	                    const std::string &A = node_text(lists[0][B]);
 	                    const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							double other = (double)(std::any_cast <bool> (nw));
@@ -986,24 +997,24 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 			else if(s == "//=") {
 				std::vector <std::any> ret_vec, val_vec;
 				for(int B = 0; B < siz; B++) {
-					const std::string &A = node_text(ctx->testlist(0)->test(B));
+					const std::string &A = node_text(lists[0][B]);
                     val_vec.push_back(query_value(A));
 				}
-			    std::any pre = visit(ctx->testlist(1)->test(0));
+			    std::any pre = visit(lists[1][0]);
 				if(std::any_cast <std::vector<std::any>> (&pre)) {
 					ret_vec = std::any_cast <std::vector<std::any>> (pre);
 				}
 				else {
 					ret_vec.push_back(pre);
 					for(int i = 1; i < siz; i++) {
-			    		ret_vec.push_back(visit(ctx->testlist(1)->test(i)));
+                        ret_vec.push_back(visit(lists[1][i]));
 			    	}
 				}
 				for(int B = 0; B < siz; B++) {
 					const auto &ret = ret_vec[B];
 				    if(std::any_cast <bool> (&ret)) {
 	                    int2048 val = (int2048)(std::any_cast <bool> (ret));
-						const std::string &A = node_text(ctx->testlist(0)->test(B));
+						const std::string &A = node_text(lists[0][B]);
 	                    const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							auto other = (int2048)(std::any_cast <bool> (nw));
@@ -1020,7 +1031,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					}
 					else if(std::any_cast <int2048> (&ret)) {
 	                    int2048 val = (std::any_cast <const int2048&> (ret));
-						const std::string &A = node_text(ctx->testlist(0)->test(B));
+						const std::string &A = node_text(lists[0][B]);
 	                    const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							auto other = (int2048)(std::any_cast <bool> (nw));
@@ -1037,7 +1048,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					}
 					else if(std::any_cast <double> (&ret)) {
 						double val = (std::any_cast <double> (ret));
-	                    const std::string &A = node_text(ctx->testlist(0)->test(B));
+	                    const std::string &A = node_text(lists[0][B]);
 	                    const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							double other = (double)(std::any_cast <bool> (nw));
@@ -1057,24 +1068,24 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 			else {
 				std::vector <std::any> ret_vec, val_vec;
 				for(int B = 0; B < siz; B++) {
-					const std::string &A = node_text(ctx->testlist(0)->test(B));
+					const std::string &A = node_text(lists[0][B]);
                     val_vec.push_back(query_value(A));
 				}
-			    std::any pre = visit(ctx->testlist(1)->test(0));
+			    std::any pre = visit(lists[1][0]);
 				if(std::any_cast <std::vector<std::any>> (&pre)) {
 					ret_vec = std::any_cast <std::vector<std::any>> (pre);
 				}
 				else {
 					ret_vec.push_back(pre);
 					for(int i = 1; i < siz; i++) {
-			    		ret_vec.push_back(visit(ctx->testlist(1)->test(i)));
+                        ret_vec.push_back(visit(lists[1][i]));
 			    	}
 				}
 				for(int B = 0; B < siz; B++) {
 					const auto &ret = ret_vec[B];
 				    if(std::any_cast <bool> (&ret)) {
 	                    int2048 val = (int2048)(std::any_cast <bool> (ret));
-						const std::string &A = node_text(ctx->testlist(0)->test(B));
+						const std::string &A = node_text(lists[0][B]);
 	                    const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							auto other = (int2048)(std::any_cast <bool> (nw));
@@ -1092,7 +1103,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					}
 					else if(std::any_cast <int2048> (&ret)) {
 	                    int2048 val = (std::any_cast <const int2048&> (ret));
-						const std::string &A = node_text(ctx->testlist(0)->test(B));
+						const std::string &A = node_text(lists[0][B]);
 	                    const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							auto other = (int2048)(std::any_cast <bool> (nw));
@@ -1110,7 +1121,7 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 					}
 					else if(std::any_cast <double> (&ret)) {
 						double val = (std::any_cast <double> (ret));
-	                    const std::string &A = node_text(ctx->testlist(0)->test(B));
+	                    const std::string &A = node_text(lists[0][B]);
 	                    const std::any &nw = val_vec[B];
 						if(std::any_cast <bool> (&nw)) {
 							double other = (double)(std::any_cast <bool> (nw));
@@ -1130,21 +1141,21 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 			}
 		    return nullptr;
 		}
-		int len = (ctx->testlist()).size(), siz = (ctx->testlist(0)->test()).size();
+		int len = (lists).size(), siz = (lists[0]).size();
 		std::vector <std::any> ret_vec{};
-		std::any pre = visit(ctx->testlist(len-1)->test(0));
+		std::any pre = visit(lists[len-1][0]);
 		if(std::any_cast <std::vector<std::any>> (&pre)) {
 			ret_vec = std::any_cast <std::vector<std::any>> (pre);
 		}
 		else {
 			ret_vec.push_back(pre);
 			for(int i = 1; i < siz; i++) {
-				ret_vec.push_back(visit(ctx->testlist(len-1)->test(i)));
+				ret_vec.push_back(visit(lists[len-1][i]));
 			}
 		}
 		for(int i = 0; i <= len - 2; i++) {
             for(int j = 0; j < siz; j++) {
-				const std::string &A = node_text(ctx->testlist(i)->test(j));
+				const std::string &A = node_text(lists[i][j]);
 				change_value(A, ret_vec[j]);
 			}
 		}
@@ -1274,10 +1285,14 @@ class EvalVisitor : public Python3ParserBaseVisitor {
         return visit(ctx->comparison());
 	}
 	std::any visitAnd_test(Python3Parser::And_testContext *ctx) override {
-		if(ctx->not_test().size() == 1) {
-			return visit(ctx->not_test(0));
+        auto it = and_cache.find(ctx);
+        if(it == and_cache.end()) it = and_cache.emplace(ctx,ctx->not_test()).first;
+        const auto &nodes = it->second;
+
+		if(nodes.size() == 1) {
+			return visit(nodes[0]);
 		}
-        for(auto ptr : ctx->not_test()) {
+        for(auto ptr : nodes) {
 			bool ret = toBool(visit(ptr));
 			if(!ret) {
 				return false;
@@ -1286,10 +1301,14 @@ class EvalVisitor : public Python3ParserBaseVisitor {
 		return true;
     }
 	std::any visitOr_test(Python3Parser::Or_testContext *ctx) override {
-		if(ctx->and_test().size() == 1) {
-			return visit(ctx->and_test(0));
+        auto it = or_cache.find(ctx);
+        if(it == or_cache.end()) it = or_cache.emplace(ctx,ctx->and_test()).first;
+        const auto &nodes = it->second;
+
+		if(nodes.size() == 1) {
+			return visit(nodes[0]);
 		}
-		for(auto ptr : ctx->and_test()) {
+		for(auto ptr : nodes) {
 			bool ret = toBool(visit(ptr));
 			if(ret) {
 				return true;
