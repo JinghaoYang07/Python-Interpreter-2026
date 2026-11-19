@@ -16,7 +16,6 @@ add_subdirectory(${PROJECT_SOURCE_DIR}/generated)
 file(GLOB_RECURSE main_src src/*.cpp)
 
 add_executable(code ${main_src}) # Add all *.cpp file after src/main.cpp, like src/Evalvisitor.cpp did
-set_property(TARGET code PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
 
 ### YOU CAN'T MODIFY THE CODE BELOW
 target_link_libraries(code PyAntlr)
